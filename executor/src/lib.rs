@@ -539,6 +539,7 @@ impl Executor {
             .args
             .iter()
             .map(|a| Self::expand_variables(a, ctx))
+            .map(|a| expand_tilde(&a))
             .collect();
         let expanded_args = aster_shell_core::glob::expand(&expanded_args);
 
@@ -718,6 +719,7 @@ impl Executor {
             .args
             .iter()
             .map(|a| Self::expand_variables(a, ctx))
+            .map(|a| expand_tilde(&a))
             .collect();
         expanded_args.splice(0..0, alias_args);
         let expanded_args = aster_shell_core::glob::expand(&expanded_args);
