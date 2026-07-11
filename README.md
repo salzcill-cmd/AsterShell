@@ -4,7 +4,7 @@
 
 **A modern, fast, lightweight, extensible Linux shell written in Rust**
 
-[![CI](https://github.com/aster-shell/AsterShell/actions/workflows/ci.yml/badge.svg)](https://github.com/aster-shell/AsterShell/actions/workflows/ci.yml)
+[![CI](https://github.com/salzcill-cmd/AsterShell/actions/workflows/ci.yml/badge.svg)](https://github.com/salzcill-cmd/AsterShell/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/aster-shell.svg)](https://crates.io/crates/aster-shell)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
@@ -64,8 +64,6 @@ AsterShell is a feature-rich shell built in Rust, designed to be a fast and exte
 
 ### Safety & Performance
 - **Safety First** -- `unsafe_code = "deny"` enforced workspace-wide with strict Clippy lints
-- **Single Binary** -- 2MB stripped release binary with LTO, no runtime dependencies
-- **Fast Startup** -- < 10ms cold start
 
 ## Quick Start
 
@@ -78,7 +76,7 @@ cargo install aster-shell
 ### Build from source
 
 ```bash
-git clone https://github.com/aster-shell/AsterShell.git
+git clone https://github.com/salzcill-cmd/AsterShell.git
 cd AsterShell
 cargo install --path .
 ```
@@ -86,10 +84,48 @@ cargo install --path .
 ### Run directly
 
 ```bash
-git clone https://github.com/aster-shell/AsterShell.git
+git clone https://github.com/salzcill-cmd/AsterShell.git
 cd AsterShell
 cargo run --release
 ```
+
+## Benchmarks
+
+### Binary Size
+
+```
+$ ls -lh target/release/aster
+2.0M   target/release/aster
+```
+
+Compiled with `opt-level = 3`, `lto = "fat"`, `strip = "symbols"`, `panic = "abort"`.
+
+### Startup Time
+
+Tested on Intel Celeron N3060 @ 1.60GHz (low-end CPU):
+
+```
+$ for i in $(seq 1 10); do
+    time echo exit | ./aster >/dev/null 2>&1
+  done
+
+Run 1:  0.020s
+Run 2:  0.014s
+Run 3:  0.020s
+Run 4:  0.010s
+Run 5:  0.020s
+Run 6:  0.021s
+Run 7:  0.026s
+Run 8:  0.015s
+Run 9:  0.010s
+Run 10: 0.009s
+
+Mean:   16.5 ms
+Min:     9 ms
+Max:    26 ms
+```
+
+On faster hardware (Ryzen/Apple Silicon), startup is well under 10ms.
 
 ## Configuration
 
@@ -242,7 +278,7 @@ Contributions are welcome! Please follow these steps:
    ```
 5. Commit your changes and open a pull request
 
-Please read the [issue tracker](https://github.com/aster-shell/AsterShell/issues) for open tasks and the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) for guidelines.
+Please read the [issue tracker](https://github.com/salzcill-cmd/AsterShell/issues) for open tasks and the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) for guidelines.
 
 ## License
 
