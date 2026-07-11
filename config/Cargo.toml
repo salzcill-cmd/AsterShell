@@ -1,0 +1,25 @@
+[package]
+name = "aster-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Configuration system for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-config"
+keywords = ["shell", "config"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

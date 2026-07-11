@@ -1,0 +1,27 @@
+[package]
+name = "aster-history"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "History management for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-history"
+keywords = ["shell", "history"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-config.workspace = true
+aster-utils.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

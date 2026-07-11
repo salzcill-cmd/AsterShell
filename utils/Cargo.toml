@@ -1,0 +1,19 @@
+[package]
+name = "aster-utils"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Shared utilities for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-utils"
+keywords = ["shell", "utilities"]
+categories = ["rust-patterns"]
+
+[dependencies]
+dirs.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

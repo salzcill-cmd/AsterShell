@@ -1,0 +1,21 @@
+[package]
+name = "aster-lexer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Lexer for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-lexer"
+keywords = ["shell", "lexer", "tokenizer"]
+categories = ["parsing"]
+
+[dependencies]
+aster-shell-core.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

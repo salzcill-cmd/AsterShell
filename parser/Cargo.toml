@@ -1,0 +1,22 @@
+[package]
+name = "aster-parser"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Parser for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-parser"
+keywords = ["shell", "parser", "ast"]
+categories = ["parsing"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-lexer.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

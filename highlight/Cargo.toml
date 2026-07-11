@@ -1,0 +1,24 @@
+[package]
+name = "aster-highlight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Syntax highlighting for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-highlight"
+keywords = ["shell", "syntax", "highlighting"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-lexer.workspace = true
+aster-theme.workspace = true
+nu-ansi-term.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

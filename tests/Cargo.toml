@@ -1,0 +1,14 @@
+[package]
+name = "aster-shell-integration-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+aster-lexer = { path = "../lexer" }
+aster-parser = { path = "../parser" }
+aster-executor = { path = "../executor" }
+
+[[test]]
+name = "integration_tests"
+path = "integration_tests.rs"

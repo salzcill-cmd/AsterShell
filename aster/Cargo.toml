@@ -1,0 +1,48 @@
+[package]
+name = "aster"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "A modern, fast, lightweight, extensible Linux shell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster"
+keywords = ["shell", "linux", "terminal"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "aster"
+path = "src/main.rs"
+doc = true
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-utils.workspace = true
+aster-config.workspace = true
+aster-parser.workspace = true
+aster-lexer.workspace = true
+aster-executor.workspace = true
+aster-prompt.workspace = true
+aster-history.workspace = true
+aster-completion.workspace = true
+aster-highlight.workspace = true
+aster-plugin.workspace = true
+aster-builtins.workspace = true
+aster-theme.workspace = true
+aster-editor.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs.workspace = true
+ctrlc.workspace = true
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "pipeline"
+path = "examples/pipeline.rs"
+
+[lints]
+workspace = true

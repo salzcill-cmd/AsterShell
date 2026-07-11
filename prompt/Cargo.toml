@@ -1,0 +1,25 @@
+[package]
+name = "aster-prompt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Prompt system for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-prompt"
+keywords = ["shell", "prompt"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-config.workspace = true
+aster-utils.workspace = true
+chrono.workspace = true
+nu-ansi-term.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

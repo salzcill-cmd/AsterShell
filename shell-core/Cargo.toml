@@ -1,0 +1,21 @@
+[package]
+name = "aster-shell-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Core types, traits, and error system for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-shell-core"
+keywords = ["shell", "core", "types"]
+categories = ["rust-patterns"]
+
+[dependencies]
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+glob.workspace = true
+
+[lints]
+workspace = true

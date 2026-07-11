@@ -1,0 +1,26 @@
+[package]
+name = "aster-editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Line editor for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-editor"
+keywords = ["shell", "editor", "readline"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-theme.workspace = true
+aster-utils.workspace = true
+aster-highlight.workspace = true
+aster-completion.workspace = true
+aster-history.workspace = true
+aster-config.workspace = true
+rustyline.workspace = true
+nu-ansi-term.workspace = true
+
+[lints]
+workspace = true

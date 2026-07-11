@@ -1,0 +1,23 @@
+[package]
+name = "aster-builtins"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Built-in commands for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-builtins"
+keywords = ["shell", "builtins", "commands"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-utils.workspace = true
+dirs.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,30 @@
+[package]
+name = "aster-executor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Executor for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-executor"
+keywords = ["shell", "executor", "process"]
+categories = ["rust-patterns"]
+
+[dependencies]
+aster-shell-core.workspace = true
+aster-parser.workspace = true
+aster-lexer.workspace = true
+aster-builtins.workspace = true
+aster-utils.workspace = true
+dirs.workspace = true
+libc.workspace = true
+thiserror.workspace = true
+log.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+aster-lexer.workspace = true
