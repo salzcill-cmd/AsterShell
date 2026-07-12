@@ -8,6 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/aster-shell.svg)](https://crates.io/crates/aster-shell)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Website](https://img.shields.io/badge/website-salzcill--cmd.github.io%2FAsterShell-blue)](https://salzcill-cmd.github.io/AsterShell/)
 
 ```
 $ ls -la 8192 files           # brace expansion {a,b,c}, {1..8192}
@@ -22,6 +23,9 @@ $ cat <<EOF ... EOF           # heredocs
 ---
 
 AsterShell is a command-line shell written in Rust that runs your existing bash scripts unchanged, while giving you syntax highlighting, autosuggestion, tab completion, and 8 built-in themes — all in a single 2.0 MB static binary.
+
+🌐 **Website**: [salzcill-cmd.github.io/AsterShell](https://salzcill-cmd.github.io/AsterShell/)
+📋 **Changelog**: [CHANGELOG.md](CHANGELOG.md)
 
 ## Why AsterShell?
 
@@ -92,6 +96,7 @@ cargo install --path .
 - **Unsafe code denied** — workspace-wide `unsafe_code = "deny"` with strict Clippy lints
 - **Single binary** — no runtime dependencies
 - **2.0 MB** stripped, LTO, `panic=abort`
+- **312 tests** — integration + unit, 0 failures
 
 ## Configuration
 
@@ -184,6 +189,22 @@ AsterShell/
 ├── config/         # TOML config loader
 └── utils/          # Shared utilities
 ```
+
+## Demo
+
+```bash
+# Install and run
+cargo install aster-shell
+aster
+
+# Inside AsterShell, try the demo:
+source examples/demo.sh
+
+# Or load the dev workflow:
+source examples/dev-workflow.sh
+```
+
+See [`examples/`](examples/) for demo scripts and plugin files.
 
 ## Requirements
 
