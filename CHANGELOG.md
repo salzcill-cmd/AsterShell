@@ -2,20 +2,83 @@
 
 All notable changes to AsterShell will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [0.1.0] — 2024-01-01
+## [0.1.0] - 2026-07-12
 
 ### Added
-- Cargo workspace with 13 crates
-- Core types: AST, source spans, error hierarchy
-- Lexer supporting words, quoted strings, operators, escapes, comments
-- Recursive-descent parser with proper operator precedence
-- Execution engine with pipelines, redirects, logical operators
-- Built-in commands: `echo`, `pwd`, `cd`, `exit`, `history`, `clear`, `which`, `type`, `help`, `version`, `alias`, `unalias`, `true`, `false`
-- PATH executable lookup
-- Command history with file persistence
-- TOML configuration system
-- Two-line prompt with exit status indicator
-- Interactive REPL with Ctrl+C handling
-- 81 unit tests across all crates
+- **Shell Core**
+  - Command substitution `$(cmd)` and backtick syntax
+  - Arithmetic expansion `$((expr))`
+  - Parameter expansion: `${var:-default}`, `${var:=value}`, `${var:+alt}`, `${var:?error}`, `${#var}`, `${var%pat}`, `${var%%pat}`, `${var#pat}`, `${var##pat}`, `${var/old/new}`, `${var//old/new}`
+  - Brace expansion: `{a,b,c}`, `{1..5}`, `{a..z}`, `{01..10}`, nested/combinatorial
+  - Tilde expansion `~` → `$HOME`
+  - Glob expansion: `*`, `?`, `[...]`, `**` recursive matching
+  - Pipelines `cmd1 | cmd2 | cmd3`
+  - Logical operators `cmd1 && cmd2`, `cmd1 || cmd2`
+  - Here-documents `cat <<EOF ... EOF`
+  - Here-strings `cmd <<< "text"`
+
+- **Control Flow**
+  - `if/elif/else/fi` conditionals
+  - `while/do/done` loops
+  - `for var in words; do/done` loops
+  - `case/pattern/esac` statements
+  - `function name {}` and `name() {}` functions
+  - `break` and `continue` loop control
+
+- **Job Control**
+  - Background jobs with `cmd &`
+  - `jobs`, `fg %N`, `bg %N`
+  - `kill [-signal] pid`
+
+- **Interactive Features**
+  - Multi-line input with automatic continuation prompt
+  - Syntax highlighting (commands, strings, variables, operators, redirects, comments)
+  - History-based autosuggestion (accept with →)
+  - Tab completion (commands, paths, dirs, env vars, tilde)
+  - Ctrl+R reverse incremental history search
+
+- **Built-in Commands (23)**
+  - echo, printf, pwd, true, false, which, type, help, version
+  - alias, unalias, export, unset, env
+  - pushd, popd, dirs
+  - eval, source, wait
+  - test / `[`
+  - jobs, fg, bg, kill
+
+- **Themes (8)**
+  - default (Monokai-inspired)
+  - nord (Arctic north-bluish)
+  - catppuccin (Mocha)
+  - tokyonight
+  - gruvbox
+  - solarized
+  - dracula
+  - onedark
+
+- **Plugin System**
+  - TOML-based `.aster` plugin format
+  - Dependency resolution between plugins
+  - Alias injection from plugins
+  - Script sourcing from plugins
+
+- **Configuration**
+  - TOML config at `~/.config/aster/config.toml`
+  - Prompt customization (segments, symbol, colors)
+  - History settings (size, persistence, timestamps)
+  - Theme selection
+
+- **Developer Experience**
+  - Workspace: 15 crates + integration test crate
+  - 312 tests, 0 failures
+  - CI: fmt, clippy, test, tarpaulin coverage
+  - 4 example plugins (git, docker, cargo-dev, python)
+  - 2 example workflow scripts
+  - Project website (GitHub Pages)
+
+- **Performance**
+  - 2.0 MB stripped binary (LTO, panic=abort)
+  - 14ms startup on Intel Celeron N3060
+  - Single static binary, no runtime dependencies
+  - Unsafe code denied workspace-wide
