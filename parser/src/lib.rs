@@ -612,10 +612,21 @@ impl<'a> Parser<'a> {
         self.skip_comments();
         let target = self.expect_word_value_with_quoted()?;
 
+        let mut body = None;
+        if kind == RedirectKind::HereDoc || kind == RedirectKind::HereString {
+            if let Ok(next) = self.peek_token() {
+                if let TokenKind::HereDocBody(content) = &next.kind {
+                    body = Some(content.clone());
+                    self.advance();
+                }
+            }
+        }
+
         Ok(Redirect {
             fd: None,
             kind,
             target,
+            body,
             span,
         })
     }

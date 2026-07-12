@@ -222,9 +222,15 @@ impl Executor {
         ctx.in_loop = true;
         let mut last = 0;
 
+        let mut all_words = Vec::new();
         for word in &for_stmt.words {
             let expanded = Self::expand_variables(word, ctx);
-            ctx.variables.insert(for_stmt.variable.clone(), expanded);
+            let braced = expand_braces(&[expanded]);
+            all_words.extend(braced);
+        }
+
+        for val in &all_words {
+            ctx.variables.insert(for_stmt.variable.clone(), val.clone());
 
             match Self::execute_body(&for_stmt.body, ctx)? {
                 ExecOutcome::Success(code) => last = code,
@@ -345,7 +351,7 @@ impl Executor {
                             // $(( - arithmetic expansion
                             i += 1;
                             if let Some(end) = find_matching_paren(&chars, i, true) {
-                                let inner: String = chars[i..end].iter().collect();
+                                let inner: String = chars[i..end.saturating_sub(1)].iter().collect();
                                 i = end + 1;
                                 match eval_arithmetic(&inner, ctx) {
                                     Ok(val) => result.push_str(&val.to_string()),
@@ -996,7 +1002,9 @@ impl Executor {
                     command.stdout(file);
                 }
                 RedirectKind::HereDoc | RedirectKind::HereString => {
-                    heredocs.push(redirect.target.clone());
+                    if let Some(body) = &redirect.body {
+                        heredocs.push(body.clone());
+                    }
                 }
                 _ => {
                     // Other redirect kinds (FdInput, FdDup, FdClose)
@@ -1847,9 +1855,7 @@ fn find_matching_paren(chars: &[char], start: usize, double: bool) -> Option<usi
                     i += 1;
                 }
             }
-            _ => {
-                i += 1;
-            }
+            _ => i += 1,
         }
     }
     None

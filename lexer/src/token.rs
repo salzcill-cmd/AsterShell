@@ -58,6 +58,8 @@ pub enum TokenKind {
     CloseBrace,
     /// Comment (from `#` to end of line).
     Comment(String),
+    /// Heredoc body content (collected by the lexer between `<<DELIM` and `DELIM`).
+    HereDocBody(String),
     /// End of input.
     Eof,
 }
@@ -89,6 +91,7 @@ impl TokenKind {
             Self::OpenBrace => "{",
             Self::CloseBrace => "}",
             Self::Comment(c) => c,
+            Self::HereDocBody(b) => b,
             Self::Eof => "",
         }
     }
@@ -119,6 +122,7 @@ impl TokenKind {
             Self::OpenBrace => "{",
             Self::CloseBrace => "}",
             Self::Comment(_) => "comment",
+            Self::HereDocBody(_) => "heredoc body",
             Self::Eof => "end of input",
         }
     }
@@ -149,6 +153,7 @@ impl std::fmt::Display for TokenKind {
             Self::OpenBrace => write!(f, "{{"),
             Self::CloseBrace => write!(f, "}}"),
             Self::Comment(c) => write!(f, "#{c}"),
+            Self::HereDocBody(b) => write!(f, "{b}"),
             Self::Eof => write!(f, "EOF"),
         }
     }

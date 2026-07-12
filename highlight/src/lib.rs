@@ -42,7 +42,7 @@ impl Highlighter {
 
             match &token.kind {
                 TokenKind::Eof => break,
-                TokenKind::Comment(_) => {
+                TokenKind::Comment(_) | TokenKind::HereDocBody(_) => {
                     result.push_str(&self.colorize_role(token, ColorRole::Comment, theme));
                 }
                 TokenKind::Word(w) => {

@@ -174,7 +174,65 @@ impl EditorWrapper {
             return false;
         }
 
+        if let Some(heredoc_delim) = Self::find_pending_heredoc(input) {
+            let lines: Vec<&str> = input.lines().collect();
+            if let Some(last_line) = lines.last() {
+                if last_line.trim() == heredoc_delim {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         true
+    }
+
+    fn find_pending_heredoc(input: &str) -> Option<String> {
+        let bytes = input.as_bytes();
+        let len = bytes.len();
+        let mut in_single = false;
+        let mut in_double = false;
+
+        let mut i = 0;
+        while i < len {
+            match bytes[i] {
+                b'\\' if !in_single && i + 1 < len => i += 2,
+                b'\'' if !in_double => {
+                    in_single = !in_single;
+                    i += 1;
+                }
+                b'"' if !in_single => {
+                    in_double = !in_double;
+                    i += 1;
+                }
+                b'<' if !in_single && !in_double => {
+                    if i + 2 < len && bytes[i + 1] == b'<' && bytes[i + 2] == b'<' {
+                        i += 3;
+                    } else if i + 1 < len && bytes[i + 1] == b'<' {
+                        let mut j = i + 2;
+                        while j < len && bytes[j].is_ascii_whitespace() {
+                            j += 1;
+                        }
+                        let mut delim = String::new();
+                        while j < len && !bytes[j].is_ascii_whitespace() {
+                            delim.push(bytes[j] as char);
+                            j += 1;
+                        }
+                        if !delim.is_empty() {
+                            let remaining = &input[j..];
+                            if !remaining.lines().any(|l| l.trim() == delim) {
+                                return Some(delim);
+                            }
+                        }
+                        i = j;
+                    } else {
+                        i += 1;
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        None
     }
 
     /// Reads a line of input from the user, supporting multi-line input.

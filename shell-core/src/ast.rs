@@ -203,6 +203,8 @@ pub struct Redirect {
     pub kind: RedirectKind,
     /// The target file or descriptor name.
     pub target: String,
+    /// Heredoc body content (populated by the lexer for `<<` redirections).
+    pub body: Option<String>,
     /// Source location.
     pub span: Span,
 }

@@ -1,5 +1,7 @@
 //! Lexer (tokenizer) that converts raw input into a stream of tokens.
 
+use std::collections::VecDeque;
+
 use aster_shell_core::{LexerError, Span};
 
 use crate::token::{Token, TokenKind};
@@ -11,6 +13,7 @@ pub struct Lexer<'a> {
     pos: usize,
     line: usize,
     column: usize,
+    token_queue: VecDeque<Token>,
 }
 
 impl<'a> Lexer<'a> {
@@ -23,6 +26,7 @@ impl<'a> Lexer<'a> {
             pos: 0,
             line: 1,
             column: 1,
+            token_queue: VecDeque::new(),
         }
     }
 
@@ -36,7 +40,7 @@ impl<'a> Lexer<'a> {
 
         loop {
             self.skip_whitespace_and_comments(&mut tokens)?;
-            if self.at_end() {
+            if self.at_end() && self.token_queue.is_empty() {
                 tokens.push(self.make_token(TokenKind::Eof));
                 break;
             }
@@ -55,6 +59,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> Result<Option<Token>, LexerError> {
+        if let Some(token) = self.token_queue.pop_front() {
+            return Ok(Some(token));
+        }
+
         self.skip_whitespace();
 
         if self.at_end() {
@@ -155,12 +163,14 @@ impl<'a> Lexer<'a> {
                             start_offset,
                         )))
                     } else {
-                        Ok(Some(self.make_token_at(
+                        let token = self.make_token_at(
                             TokenKind::LessLess,
                             start_line,
                             start_col,
                             start_offset,
-                        )))
+                        );
+                        self.read_heredoc_body();
+                        Ok(Some(token))
                     }
                 } else if self.peek() == Some('&') {
                     self.advance();
@@ -225,13 +235,21 @@ impl<'a> Lexer<'a> {
                 )))
             }
             '{' => {
-                self.advance();
-                Ok(Some(self.make_token_at(
-                    TokenKind::OpenBrace,
-                    start_line,
-                    start_col,
-                    start_offset,
-                )))
+                let next_is_space = self
+                    .chars
+                    .get(self.pos + 1)
+                    .map_or(true, |c| c.is_ascii_whitespace() || *c == '}');
+                if next_is_space {
+                    self.advance();
+                    Ok(Some(self.make_token_at(
+                        TokenKind::OpenBrace,
+                        start_line,
+                        start_col,
+                        start_offset,
+                    )))
+                } else {
+                    Ok(Some(self.read_word(start_line, start_col, start_offset)))
+                }
             }
             '}' => {
                 self.advance();
@@ -256,7 +274,51 @@ impl<'a> Lexer<'a> {
 
         while let Some(ch) = self.peek() {
             match ch {
-                '|' | '&' | ';' | '<' | '>' | '(' | ')' | '\'' | '"' | '{' | '}' => break,
+                '|' | '&' | ';' | '<' | '>' | ')' | '\'' | '"' => break,
+                '}' => {
+                    if word.starts_with('{') || word.ends_with('$') {
+                        break;
+                    }
+                    break;
+                }
+                '(' => {
+                    if word.ends_with('$') {
+                        let next_is_paren =
+                            self.chars.get(self.pos + 1).map_or(false, |c| *c == '(');
+                        word.push(ch);
+                        self.advance();
+                        if next_is_paren {
+                            word.push('(');
+                            self.advance();
+                            self.read_balanced(&mut word, 2, ')');
+                        } else {
+                            self.read_balanced(&mut word, 1, ')');
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                '$' => {
+                    word.push(ch);
+                    self.advance();
+                    if self.peek() == Some('{') {
+                        word.push('{');
+                        self.advance();
+                        self.read_balanced(&mut word, 1, '}');
+                    }
+                }
+                '{' => {
+                    let next_is_space = self
+                        .chars
+                        .get(self.pos + 1)
+                        .map_or(true, |c| c.is_ascii_whitespace() || *c == '}');
+                    if next_is_space && !word.is_empty() {
+                        break;
+                    }
+                    word.push(ch);
+                    self.advance();
+                    self.read_balanced(&mut word, 1, '}');
+                }
                 c if c.is_ascii_whitespace() => break,
                 '\\' => {
                     self.advance();
@@ -273,6 +335,96 @@ impl<'a> Lexer<'a> {
         }
 
         self.make_token_at(TokenKind::Word(word), start_line, start_col, start_offset)
+    }
+
+    fn read_balanced(&mut self, word: &mut String, mut depth: i32, close: char) {
+        let open = match close {
+            ')' => '(',
+            '}' => '{',
+            _ => return,
+        };
+        while let Some(ch) = self.peek() {
+            if ch == open {
+                depth += 1;
+                word.push(ch);
+                self.advance();
+            } else if ch == close {
+                depth -= 1;
+                word.push(ch);
+                self.advance();
+                if depth == 0 {
+                    return;
+                }
+            } else {
+                word.push(ch);
+                self.advance();
+            }
+        }
+    }
+
+    fn read_heredoc_body(&mut self) {
+        self.skip_whitespace();
+        if self.at_end() {
+            return;
+        }
+
+        let mut delimiter = String::new();
+        let delim_start_line = self.line;
+        let delim_start_col = self.column;
+        let delim_start_offset = self.pos;
+        while let Some(ch) = self.peek() {
+            if ch == '\n' || ch.is_ascii_whitespace() {
+                break;
+            }
+            delimiter.push(ch);
+            self.advance();
+        }
+        if delimiter.is_empty() {
+            return;
+        }
+
+        self.token_queue.push_back(self.make_token_at(
+            TokenKind::Word(delimiter.clone()),
+            delim_start_line,
+            delim_start_col,
+            delim_start_offset,
+        ));
+
+        if self.peek() == Some('\n') {
+            self.advance();
+        }
+
+        let mut body = String::new();
+        while !self.at_end() {
+            let mut line = String::new();
+            while let Some(ch) = self.peek() {
+                if ch == '\n' {
+                    self.advance();
+                    break;
+                }
+                line.push(ch);
+                self.advance();
+            }
+
+            if line.trim() == delimiter {
+                break;
+            }
+
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(&line);
+        }
+
+        let start_line = self.line;
+        let start_col = self.column;
+        let start_offset = self.pos;
+        self.token_queue.push_back(self.make_token_at(
+            TokenKind::HereDocBody(body),
+            start_line,
+            start_col,
+            start_offset,
+        ));
     }
 
     fn read_single_quote(
@@ -613,6 +765,23 @@ mod tests {
                 TokenKind::Word("cat".into()),
                 TokenKind::LessLess,
                 TokenKind::Word("EOF".into()),
+                TokenKind::HereDocBody("".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_heredoc_with_body() {
+        let input = "cat << EOF\nhello world\nEOF";
+        let tokens = tokenize_all(input);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Word("cat".into()),
+                TokenKind::LessLess,
+                TokenKind::Word("EOF".into()),
+                TokenKind::HereDocBody("hello world".into()),
                 TokenKind::Eof,
             ]
         );
