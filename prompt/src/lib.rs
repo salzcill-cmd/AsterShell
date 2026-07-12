@@ -137,6 +137,26 @@ impl Prompt {
         Some(status)
     }
 
+    /// Returns true if running inside an SSH session.
+    fn is_ssh() -> bool {
+        std::env::var("SSH_CONNECTION").is_ok() || std::env::var("SSH_CLIENT").is_ok()
+    }
+
+    /// Returns the active virtualenv name, if any.
+    fn virtualenv() -> Option<String> {
+        std::env::var("VIRTUAL_ENV")
+            .ok()
+            .and_then(|p| PathBuf::from(p).file_name().map(|n| n.to_string_lossy().into_owned()))
+    }
+
+    /// Returns the count of background jobs.
+    fn job_count() -> u32 {
+        std::env::var("ASTER_JOB_COUNT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    }
+
     /// Renders the full prompt string for the given last exit code and command duration.
     #[must_use]
     pub fn render(&self, last_exit_code: i32, last_duration: std::time::Duration) -> String {
@@ -169,6 +189,22 @@ impl Prompt {
                 "duration" => {
                     if !last_duration.is_zero() && last_duration.as_millis() > 100 {
                         result.push_str(&self.render_duration(last_duration));
+                    }
+                }
+                "ssh" => {
+                    if Self::is_ssh() {
+                        result.push_str(&self.render_ssh());
+                    }
+                }
+                "venv" => {
+                    if let Some(name) = Self::virtualenv() {
+                        result.push_str(&self.render_venv(&name));
+                    }
+                }
+                "jobs" => {
+                    let count = Self::job_count();
+                    if count > 0 {
+                        result.push_str(&self.render_jobs(count));
                     }
                 }
                 _ => {}
@@ -281,6 +317,22 @@ impl Prompt {
         format!("{} ", style.paint(&self.symbol))
     }
 
+    fn render_ssh(&self) -> String {
+        let style = Style::new().fg(AnsiColor::Yellow).bold();
+        let host = Self::hostname();
+        format!(" {} ", style.paint(format!("\u{1F4BB}{host}")))
+    }
+
+    fn render_venv(&self, name: &str) -> String {
+        let style = Style::new().fg(AnsiColor::Blue).bold();
+        format!(" {} ", style.paint(format!("\u{1F40D}{name}")))
+    }
+
+    fn render_jobs(&self, count: u32) -> String {
+        let style = Style::new().fg(AnsiColor::DarkGray).bold();
+        format!(" {} ", style.paint(format!("\u{2699}{count}")))
+    }
+
     fn render_legacy(&self, last_exit_code: i32) -> String {
         let dir = Self::cwd_display();
 
@@ -307,7 +359,14 @@ impl Default for Prompt {
         Self {
             show_status: true,
             symbol: "\u{276f}".into(),
-            segments: vec!["status".into(), "dir".into()],
+            segments: vec![
+                "status".into(),
+                "dir".into(),
+                "git".into(),
+                "ssh".into(),
+                "venv".into(),
+                "jobs".into(),
+            ],
         }
     }
 }
@@ -370,5 +429,14 @@ mod tests {
         if let Some(branch) = Prompt::git_branch() {
             assert!(!branch.is_empty());
         }
+    }
+
+    #[test]
+    fn test_default_segments_include_git_ssh_venv_jobs() {
+        let p = Prompt::default();
+        assert!(p.segments.contains(&"git".to_string()));
+        assert!(p.segments.contains(&"ssh".to_string()));
+        assert!(p.segments.contains(&"venv".to_string()));
+        assert!(p.segments.contains(&"jobs".to_string()));
     }
 }

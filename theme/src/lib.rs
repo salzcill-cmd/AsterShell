@@ -62,6 +62,10 @@ pub enum ColorRole {
     Success,
     /// Comment text (`# ...`).
     Comment,
+    /// Shell keywords (`if`, `then`, `else`, `fi`, `for`, `while`, `done`, etc.).
+    Keyword,
+    /// Numeric literals.
+    Number,
     /// Prompt user@host segment.
     PromptUser,
     /// Prompt current directory segment.
@@ -107,20 +111,22 @@ impl Theme for DefaultTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (248, 248, 242),
-            Background => (39, 40, 34),
-            Command    => (249, 38, 114),
-            String     => (230, 219, 116),
-            Variable   => (102, 217, 239),
-            Operator   => (249, 38, 89),
-            Redirect   => (166, 226, 46),
-            Path       => (166, 226, 46),
-            Error      => (249, 38, 114),
-            Success    => (166, 226, 46),
-            Comment    => (117, 113, 94),
-            PromptUser => (102, 217, 239),
-            PromptDir  => (166, 226, 46),
-            PromptGit  => (249, 38, 114),
+            Foreground   => (248, 248, 242),
+            Background   => (39, 40, 34),
+            Command      => (249, 38, 114),
+            String       => (230, 219, 116),
+            Variable     => (102, 217, 239),
+            Operator     => (249, 38, 89),
+            Redirect     => (166, 226, 46),
+            Path         => (166, 226, 46),
+            Error        => (249, 38, 114),
+            Success      => (166, 226, 46),
+            Comment      => (117, 113, 94),
+            Keyword      => (255, 97, 136),
+            Number       => (174, 129, 255),
+            PromptUser   => (102, 217, 239),
+            PromptDir    => (166, 226, 46),
+            PromptGit    => (249, 38, 114),
             PromptSymbol => (249, 38, 114),
         };
         colors.get(&role).copied()
@@ -137,20 +143,22 @@ impl Theme for NordTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (236, 239, 244),
-            Background => (46, 52, 64),
-            Command    => (136, 192, 208),
-            String     => (163, 190, 140),
-            Variable   => (180, 190, 254),
-            Operator   => (191, 97, 106),
-            Redirect   => (191, 97, 106),
-            Path       => (163, 190, 140),
-            Error      => (191, 97, 106),
-            Success    => (163, 190, 140),
-            Comment    => (129, 137, 153),
-            PromptUser => (136, 192, 208),
-            PromptDir  => (163, 190, 140),
-            PromptGit  => (208, 135, 112),
+            Foreground   => (236, 239, 244),
+            Background   => (46, 52, 64),
+            Command      => (136, 192, 208),
+            String       => (163, 190, 140),
+            Variable     => (180, 190, 254),
+            Operator     => (191, 97, 106),
+            Redirect     => (191, 97, 106),
+            Path         => (163, 190, 140),
+            Error        => (191, 97, 106),
+            Success      => (163, 190, 140),
+            Comment      => (129, 137, 153),
+            Keyword      => (180, 190, 254),
+            Number       => (208, 135, 112),
+            PromptUser   => (136, 192, 208),
+            PromptDir    => (163, 190, 140),
+            PromptGit    => (208, 135, 112),
             PromptSymbol => (136, 192, 208),
         };
         colors.get(&role).copied()
@@ -167,20 +175,22 @@ impl Theme for CatppuccinTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (205, 214, 244),
-            Background => (30, 30, 46),
-            Command    => (137, 180, 250),
-            String     => (166, 227, 161),
-            Variable   => (245, 224, 220),
-            Operator   => (243, 139, 168),
-            Redirect   => (250, 179, 135),
-            Path       => (166, 227, 161),
-            Error      => (243, 139, 168),
-            Success    => (166, 227, 161),
-            Comment    => (108, 112, 134),
-            PromptUser => (137, 180, 250),
-            PromptDir  => (166, 227, 161),
-            PromptGit  => (250, 179, 135),
+            Foreground   => (205, 214, 244),
+            Background   => (30, 30, 46),
+            Command      => (137, 180, 250),
+            String       => (166, 227, 161),
+            Variable     => (245, 224, 220),
+            Operator     => (243, 139, 168),
+            Redirect     => (250, 179, 135),
+            Path         => (166, 227, 161),
+            Error        => (243, 139, 168),
+            Success      => (166, 227, 161),
+            Comment      => (108, 112, 134),
+            Keyword      => (203, 166, 247),
+            Number       => (250, 179, 135),
+            PromptUser   => (137, 180, 250),
+            PromptDir    => (166, 227, 161),
+            PromptGit    => (250, 179, 135),
             PromptSymbol => (203, 166, 247),
         };
         colors.get(&role).copied()
@@ -197,20 +207,22 @@ impl Theme for TokyoNightTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (192, 202, 245),
-            Background => (26, 27, 38),
-            Command    => (125, 207, 255),
-            String     => (158, 206, 106),
-            Variable   => (192, 202, 245),
-            Operator   => (247, 118, 142),
-            Redirect   => (255, 158, 100),
-            Path       => (158, 206, 106),
-            Error      => (247, 118, 142),
-            Success    => (158, 206, 106),
-            Comment    => (115, 118, 141),
-            PromptUser => (125, 207, 255),
-            PromptDir  => (158, 206, 106),
-            PromptGit  => (255, 158, 100),
+            Foreground   => (192, 202, 245),
+            Background   => (26, 27, 38),
+            Command      => (125, 207, 255),
+            String       => (158, 206, 106),
+            Variable     => (192, 202, 245),
+            Operator     => (247, 118, 142),
+            Redirect     => (255, 158, 100),
+            Path         => (158, 206, 106),
+            Error        => (247, 118, 142),
+            Success      => (158, 206, 106),
+            Comment      => (115, 118, 141),
+            Keyword      => (192, 202, 245),
+            Number       => (255, 158, 100),
+            PromptUser   => (125, 207, 255),
+            PromptDir    => (158, 206, 106),
+            PromptGit    => (255, 158, 100),
             PromptSymbol => (192, 202, 245),
         };
         colors.get(&role).copied()
@@ -227,20 +239,22 @@ impl Theme for GruvboxTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (235, 219, 178),
-            Background => (40, 40, 40),
-            Command    => (131, 165, 152),
-            String     => (184, 187, 38),
-            Variable   => (214, 153, 104),
-            Operator   => (214, 94, 98),
-            Redirect   => (214, 94, 98),
-            Path       => (184, 187, 38),
-            Error      => (214, 94, 98),
-            Success    => (184, 187, 38),
-            Comment    => (124, 111, 100),
-            PromptUser => (131, 165, 152),
-            PromptDir  => (184, 187, 38),
-            PromptGit  => (214, 153, 104),
+            Foreground   => (235, 219, 178),
+            Background   => (40, 40, 40),
+            Command      => (131, 165, 152),
+            String       => (184, 187, 38),
+            Variable     => (214, 153, 104),
+            Operator     => (214, 94, 98),
+            Redirect     => (214, 94, 98),
+            Path         => (184, 187, 38),
+            Error        => (214, 94, 98),
+            Success      => (184, 187, 38),
+            Comment      => (124, 111, 100),
+            Keyword      => (250, 189, 47),
+            Number       => (214, 153, 104),
+            PromptUser   => (131, 165, 152),
+            PromptDir    => (184, 187, 38),
+            PromptGit    => (214, 153, 104),
             PromptSymbol => (214, 94, 98),
         };
         colors.get(&role).copied()
@@ -257,20 +271,22 @@ impl Theme for SolarizedTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (131, 148, 150),
-            Background => (0, 43, 54),
-            Command    => (38, 139, 210),
-            String     => (133, 153, 0),
-            Variable   => (211, 54, 130),
-            Operator   => (203, 75, 22),
-            Redirect   => (203, 75, 22),
-            Path       => (133, 153, 0),
-            Error      => (220, 50, 47),
-            Success    => (133, 153, 0),
-            Comment    => (88, 110, 117),
-            PromptUser => (38, 139, 210),
-            PromptDir  => (133, 153, 0),
-            PromptGit  => (211, 54, 130),
+            Foreground   => (131, 148, 150),
+            Background   => (0, 43, 54),
+            Command      => (38, 139, 210),
+            String       => (133, 153, 0),
+            Variable     => (211, 54, 130),
+            Operator     => (203, 75, 22),
+            Redirect     => (203, 75, 22),
+            Path         => (133, 153, 0),
+            Error        => (220, 50, 47),
+            Success      => (133, 153, 0),
+            Comment      => (88, 110, 117),
+            Keyword      => (147, 161, 161),
+            Number       => (203, 75, 22),
+            PromptUser   => (38, 139, 210),
+            PromptDir    => (133, 153, 0),
+            PromptGit    => (211, 54, 130),
             PromptSymbol => (203, 75, 22),
         };
         colors.get(&role).copied()
@@ -287,20 +303,22 @@ impl Theme for DraculaTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (248, 248, 242),
-            Background => (40, 42, 54),
-            Command    => (255, 121, 198),
-            String     => (241, 250, 140),
-            Variable   => (189, 147, 249),
-            Operator   => (255, 85, 85),
-            Redirect   => (255, 85, 85),
-            Path       => (80, 250, 123),
-            Error      => (255, 85, 85),
-            Success    => (80, 250, 123),
-            Comment    => (98, 114, 164),
-            PromptUser => (189, 147, 249),
-            PromptDir  => (80, 250, 123),
-            PromptGit  => (255, 121, 198),
+            Foreground   => (248, 248, 242),
+            Background   => (40, 42, 54),
+            Command      => (255, 121, 198),
+            String       => (241, 250, 140),
+            Variable     => (189, 147, 249),
+            Operator     => (255, 85, 85),
+            Redirect     => (255, 85, 85),
+            Path         => (80, 250, 123),
+            Error        => (255, 85, 85),
+            Success      => (80, 250, 123),
+            Comment      => (98, 114, 164),
+            Keyword      => (189, 147, 249),
+            Number       => (189, 147, 249),
+            PromptUser   => (189, 147, 249),
+            PromptDir    => (80, 250, 123),
+            PromptGit    => (255, 121, 198),
             PromptSymbol => (255, 121, 198),
         };
         colors.get(&role).copied()
@@ -317,21 +335,183 @@ impl Theme for OneDarkTheme {
 
     fn color(&self, role: ColorRole) -> Option<Color> {
         let colors = theme_colors! {
-            Foreground => (171, 178, 191),
-            Background => (40, 44, 52),
-            Command    => (198, 120, 221),
-            String     => (152, 195, 121),
-            Variable   => (224, 175, 104),
-            Operator   => (190, 80, 70),
-            Redirect   => (190, 80, 70),
-            Path       => (86, 182, 194),
-            Error      => (224, 108, 117),
-            Success    => (152, 195, 121),
-            Comment    => (92, 99, 112),
-            PromptUser => (198, 120, 221),
-            PromptDir  => (86, 182, 194),
-            PromptGit  => (224, 175, 104),
+            Foreground   => (171, 178, 191),
+            Background   => (40, 44, 52),
+            Command      => (198, 120, 221),
+            String       => (152, 195, 121),
+            Variable     => (224, 175, 104),
+            Operator     => (190, 80, 70),
+            Redirect     => (190, 80, 70),
+            Path         => (86, 182, 194),
+            Error        => (224, 108, 117),
+            Success      => (152, 195, 121),
+            Comment      => (92, 99, 112),
+            Keyword      => (198, 120, 221),
+            Number       => (209, 154, 102),
+            PromptUser   => (198, 120, 221),
+            PromptDir    => (86, 182, 194),
+            PromptGit    => (224, 175, 104),
             PromptSymbol => (198, 120, 221),
+        };
+        colors.get(&role).copied()
+    }
+}
+
+/// Rose Pine theme.
+pub struct RosePineTheme;
+
+impl Theme for RosePineTheme {
+    fn name(&self) -> &str {
+        "rosepine"
+    }
+
+    fn color(&self, role: ColorRole) -> Option<Color> {
+        let colors = theme_colors! {
+            Foreground   => (224, 222, 244),
+            Background   => (25, 23, 36),
+            Command      => (196, 167, 231),
+            String       => (156, 207, 216),
+            Variable     => (235, 188, 186),
+            Operator     => (235, 139, 152),
+            Redirect     => (235, 139, 152),
+            Path         => (156, 207, 216),
+            Error        => (235, 139, 152),
+            Success      => (156, 207, 216),
+            Comment      => (110, 106, 134),
+            Keyword      => (196, 167, 231),
+            Number       => (246, 193, 119),
+            PromptUser   => (196, 167, 231),
+            PromptDir    => (156, 207, 216),
+            PromptGit    => (246, 193, 119),
+            PromptSymbol => (235, 139, 152),
+        };
+        colors.get(&role).copied()
+    }
+}
+
+/// Everforest theme.
+pub struct EverforestTheme;
+
+impl Theme for EverforestTheme {
+    fn name(&self) -> &str {
+        "everforest"
+    }
+
+    fn color(&self, role: ColorRole) -> Option<Color> {
+        let colors = theme_colors! {
+            Foreground   => (211, 198, 170),
+            Background   => (47, 53, 49),
+            Command      => (167, 192, 128),
+            String       => (211, 198, 170),
+            Variable     => (230, 184, 123),
+            Operator     => (230, 126, 128),
+            Redirect     => (230, 126, 128),
+            Path         => (167, 192, 128),
+            Error        => (230, 126, 128),
+            Success      => (167, 192, 128),
+            Comment      => (114, 122, 113),
+            Keyword      => (219, 188, 129),
+            Number       => (230, 184, 123),
+            PromptUser   => (167, 192, 128),
+            PromptDir    => (211, 198, 170),
+            PromptGit    => (219, 188, 129),
+            PromptSymbol => (230, 126, 128),
+        };
+        colors.get(&role).copied()
+    }
+}
+
+/// Kanagawa theme.
+pub struct KanagawaTheme;
+
+impl Theme for KanagawaTheme {
+    fn name(&self) -> &str {
+        "kanagawa"
+    }
+
+    fn color(&self, role: ColorRole) -> Option<Color> {
+        let colors = theme_colors! {
+            Foreground   => (220, 215, 195),
+            Background   => (31, 31, 40),
+            Command      => (152, 159, 179),
+            String       => (152, 195, 121),
+            Variable     => (255, 159, 114),
+            Operator     => (192, 94, 120),
+            Redirect     => (192, 94, 120),
+            Path         => (152, 195, 121),
+            Error        => (192, 94, 120),
+            Success      => (152, 195, 121),
+            Comment      => (84, 84, 109),
+            Keyword      => (255, 92, 99),
+            Number       => (255, 159, 114),
+            PromptUser   => (152, 159, 179),
+            PromptDir    => (152, 195, 121),
+            PromptGit    => (255, 159, 114),
+            PromptSymbol => (192, 94, 120),
+        };
+        colors.get(&role).copied()
+    }
+}
+
+/// Material Palenight theme.
+pub struct MaterialPalenightTheme;
+
+impl Theme for MaterialPalenightTheme {
+    fn name(&self) -> &str {
+        "palenight"
+    }
+
+    fn color(&self, role: ColorRole) -> Option<Color> {
+        let colors = theme_colors! {
+            Foreground   => (171, 178, 191),
+            Background   => (40, 44, 52),
+            Command      => (125, 207, 255),
+            String       => (152, 195, 121),
+            Variable     => (224, 175, 104),
+            Operator     => (190, 80, 70),
+            Redirect     => (190, 80, 70),
+            Path         => (86, 182, 194),
+            Error        => (224, 108, 117),
+            Success      => (152, 195, 121),
+            Comment      => (92, 99, 112),
+            Keyword      => (198, 120, 221),
+            Number       => (209, 154, 102),
+            PromptUser   => (125, 207, 255),
+            PromptDir    => (86, 182, 194),
+            PromptGit    => (209, 154, 102),
+            PromptSymbol => (198, 120, 221),
+        };
+        colors.get(&role).copied()
+    }
+}
+
+/// Tokyo Night Light theme.
+pub struct TokyoNightStormTheme;
+
+impl Theme for TokyoNightStormTheme {
+    fn name(&self) -> &str {
+        "tokyonight-storm"
+    }
+
+    fn color(&self, role: ColorRole) -> Option<Color> {
+        let colors = theme_colors! {
+            Foreground   => (192, 202, 245),
+            Background   => (35, 39, 55),
+            Command      => (125, 207, 255),
+            String       => (158, 206, 106),
+            Variable     => (192, 202, 245),
+            Operator     => (247, 118, 142),
+            Redirect     => (255, 158, 100),
+            Path         => (158, 206, 106),
+            Error        => (247, 118, 142),
+            Success      => (158, 206, 106),
+            Comment      => (115, 118, 141),
+            Keyword      => (192, 202, 245),
+            Number       => (255, 158, 100),
+            PromptUser   => (125, 207, 255),
+            PromptDir    => (158, 206, 106),
+            PromptGit    => (255, 158, 100),
+            PromptSymbol => (192, 202, 245),
         };
         colors.get(&role).copied()
     }
@@ -348,6 +528,11 @@ pub fn builtin_themes() -> Vec<Box<dyn Theme>> {
         Box::new(SolarizedTheme),
         Box::new(DraculaTheme),
         Box::new(OneDarkTheme),
+        Box::new(RosePineTheme),
+        Box::new(EverforestTheme),
+        Box::new(KanagawaTheme),
+        Box::new(MaterialPalenightTheme),
+        Box::new(TokyoNightStormTheme),
     ]
 }
 
@@ -369,6 +554,11 @@ pub fn theme_names() -> Vec<&'static str> {
         "solarized",
         "dracula",
         "onedark",
+        "rosepine",
+        "everforest",
+        "kanagawa",
+        "palenight",
+        "tokyonight-storm",
     ]
 }
 
@@ -436,6 +626,8 @@ mod tests {
         assert!(names.contains(&"nord"));
         assert!(names.contains(&"catppuccin"));
         assert!(names.contains(&"dracula"));
+        assert!(names.contains(&"rosepine"));
+        assert!(names.contains(&"kanagawa"));
     }
 
     #[test]
@@ -464,6 +656,13 @@ mod tests {
             assert!(theme.color(ColorRole::Command).is_some());
             assert!(theme.color(ColorRole::String).is_some());
             assert!(theme.color(ColorRole::Variable).is_some());
+            assert!(theme.color(ColorRole::Keyword).is_some());
+            assert!(theme.color(ColorRole::Number).is_some());
         }
+    }
+
+    #[test]
+    fn test_thirteen_themes() {
+        assert_eq!(builtin_themes().len(), 13);
     }
 }

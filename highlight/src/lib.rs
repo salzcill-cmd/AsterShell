@@ -6,6 +6,15 @@
 use aster_lexer::{Lexer, Token, TokenKind};
 use aster_theme::{ColorRole, Theme};
 
+const SHELL_KEYWORDS: &[&str] = &[
+    "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+    "case", "esac", "in", "function", "select", "return", "exit", "local",
+    "export", "readonly", "declare", "typeset", "unset", "shift", "source",
+    ".", "trap", "exec", "eval", "set", "unset", "getopts", "wait", "kill",
+    "break", "continue", "true", "false", "test", "[", "[[", "]]",
+    "time", "coproc", "async", "await",
+];
+
 /// Applies syntax highlighting to shell input lines.
 pub struct Highlighter;
 
@@ -34,7 +43,6 @@ impl Highlighter {
 
             let span = token.span;
 
-            // Reconstruct whitespace/gap between tokens from spans
             if span.offset > prev_end {
                 result.push_str(&input[prev_end..span.offset]);
             }
@@ -48,6 +56,10 @@ impl Highlighter {
                 TokenKind::Word(w) => {
                     if w.starts_with('$') {
                         result.push_str(&self.colorize_role(token, ColorRole::Variable, theme));
+                    } else if Self::is_number(w) {
+                        result.push_str(&self.colorize_role(token, ColorRole::Number, theme));
+                    } else if Self::is_keyword(w) {
+                        result.push_str(&self.colorize_role(token, ColorRole::Keyword, theme));
                     } else if result.is_empty() || Self::is_after_pipe_or_semicolon(&result) {
                         result.push_str(&self.colorize_role(token, ColorRole::Command, theme));
                     } else {
@@ -82,7 +94,6 @@ impl Highlighter {
             }
         }
 
-        // Append any trailing content after last token
         if prev_end < input.len() {
             result.push_str(&input[prev_end..]);
         }
@@ -102,6 +113,22 @@ impl Highlighter {
         } else {
             token.kind.text().to_string()
         }
+    }
+
+    fn is_keyword(word: &str) -> bool {
+        SHELL_KEYWORDS.contains(&word)
+    }
+
+    fn is_number(word: &str) -> bool {
+        if word.is_empty() {
+            return false;
+        }
+        let bytes = word.as_bytes();
+        bytes.iter().all(|b| b.is_ascii_digit())
+            || (bytes.len() > 2
+                && bytes[0] == b'0'
+                && (bytes[1] == b'x' || bytes[1] == b'X')
+                && bytes[2..].iter().all(|b| b.is_ascii_hexdigit()))
     }
 
     fn is_after_pipe_or_semicolon(s: &str) -> bool {
@@ -146,5 +173,27 @@ mod tests {
         let theme = aster_theme::DefaultTheme;
         let result = h.highlight("ls | grep foo", &theme);
         assert!(result.contains('|'));
+    }
+
+    #[test]
+    fn test_is_keyword() {
+        assert!(Highlighter::is_keyword("if"));
+        assert!(Highlighter::is_keyword("then"));
+        assert!(Highlighter::is_keyword("fi"));
+        assert!(Highlighter::is_keyword("for"));
+        assert!(Highlighter::is_keyword("done"));
+        assert!(!Highlighter::is_keyword("echo"));
+        assert!(!Highlighter::is_keyword("ls"));
+    }
+
+    #[test]
+    fn test_is_number() {
+        assert!(Highlighter::is_number("42"));
+        assert!(Highlighter::is_number("0"));
+        assert!(Highlighter::is_number("0xFF"));
+        assert!(Highlighter::is_number("0XAB"));
+        assert!(!Highlighter::is_number("hello"));
+        assert!(!Highlighter::is_number(""));
+        assert!(!Highlighter::is_number("12abc"));
     }
 }

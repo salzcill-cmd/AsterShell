@@ -546,3 +546,78 @@ fn test_heredoc_execution() {
     let trimmed = output.trim();
     assert_eq!(trimmed, "hello world", "got: {trimmed}");
 }
+
+#[test]
+fn test_string_length() {
+    let output = run_output("string length hello");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "5", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_lower() {
+    let output = run_output("string lower HELLO");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "hello", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_upper() {
+    let output = run_output("string upper hello");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "HELLO", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_join() {
+    let output = run_output("string join , a b c");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "a,b,c", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_split() {
+    let output = run_output("string split , a,b,c");
+    let trimmed = output.trim().lines().collect::<Vec<_>>().join(" ");
+    assert_eq!(trimmed, "a b c", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_capital() {
+    let output = run_output("string capital hello");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "Hello", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_escape() {
+    let output = run_output("string escape \"hello world\"");
+    let trimmed = output.trim();
+    assert!(!trimmed.is_empty(), "got: {trimmed}");
+}
+
+#[test]
+fn test_string_repeat() {
+    let output = run_output("string repeat 3 ha");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "hahaha", "got: {trimmed}");
+}
+
+#[test]
+fn test_string_match_glob() {
+    let (code, _) = run("string match 'foo*' foobar").unwrap();
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn test_string_match_no_match() {
+    let (code, _) = run("string match 'xyz' hello").unwrap();
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn test_string_sub() {
+    let output = run_output("string sub 2:4 hello");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "ll", "got: {trimmed}");
+}

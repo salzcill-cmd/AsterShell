@@ -101,11 +101,19 @@ impl Shell {
         self.load_startup_scripts();
 
         if self.config.shell.welcome_message {
+            let version = aster_shell_core::VERSION;
             eprintln!(
-                "{} {} — type `help` for builtins, `exit` to quit.",
-                aster_shell_core::SHELL_NAME,
-                aster_shell_core::VERSION,
+                "\x1b[38;2;167;139;250m  \u{2726} \x1b[1;38;2;196;167;231mAsterShell\x1b[0m \
+                 \x1b[38;2;110;106;134mv{version}\x1b[0m"
             );
+            eprintln!(
+                "\x1b[38;2;110;106;134m  \u{2500}\u{2500}\u{2500} \
+                 type \x1b[1;38;2;156;207;216mhelp\x1b[0m \
+                 \x1b[38;2;110;106;134mfor builtins, \
+                 \x1b[1;38;2;156;207;216mexit\x1b[0m \
+                 \x1b[38;2;110;106;134mto quit\x1b[0m"
+            );
+            eprintln!();
         }
 
         // Build the prompt

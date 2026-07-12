@@ -33,8 +33,9 @@ pub fn is_builtin(name: &str) -> bool {
             | "wait"
             | "eval"
             | "source"
-            | "test"
+            |         "test"
             | "["
+            | "string"
     )
 }
 
@@ -74,6 +75,7 @@ pub fn execute(
         "eval" => Ok(None),   // eval is handled by executor
         "source" => Ok(None), // source is handled by executor
         "test" | "[" => test_cmd(args).map(Some),
+        "string" => string_cmd(args).map(Some),
         _ => Ok(None),
     }
 }
@@ -103,6 +105,7 @@ pub const fn builtin_list() -> &'static [(&'static str, &'static str)] {
         ("eval", "Evaluate arguments as a command"),
         ("source", "Execute commands from a file"),
         ("test", "Evaluate conditional expression"),
+        ("string", "String manipulation (length, sub, match, etc.)"),
     ]
 }
 
@@ -424,6 +427,313 @@ fn test_cmd(args: &[String]) -> Result<i32, ExecError> {
     }
 }
 
+/// Fish-style `string` builtin for string manipulation.
+///
+/// Usage: `string <SUBCOMMAND> [OPTIONS] [ARG ...]`
+///
+/// Subcommands: `length`, `sub`, `match`, `replace`, `trim`, `split`,
+/// `join`, `repeat`, `escape`, `lower`, `upper`, `capital`.
+fn string_cmd(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string: missing subcommand");
+        return Ok(1);
+    }
+
+    match args[0].as_str() {
+        "length" => string_length(&args[1..]),
+        "sub" => string_sub(&args[1..]),
+        "match" => string_match(&args[1..]),
+        "replace" => string_replace(&args[1..]),
+        "trim" => string_trim(&args[1..]),
+        "split" => string_split(&args[1..]),
+        "join" => string_join(&args[1..]),
+        "repeat" => string_repeat(&args[1..]),
+        "escape" => string_escape(&args[1..]),
+        "lower" => string_lower(&args[1..]),
+        "upper" => string_upper(&args[1..]),
+        "capital" => string_capital(&args[1..]),
+        _ => {
+            eprintln!("string: unknown subcommand '{}'", args[0]);
+            Ok(1)
+        }
+    }
+}
+
+fn string_length(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string length: missing argument");
+        return Ok(1);
+    }
+    for arg in args {
+        println!("{}", arg.len());
+    }
+    Ok(0)
+}
+
+fn string_sub(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string sub: missing argument");
+        return Ok(1);
+    }
+    let range_str = &args[0];
+    let text_args = &args[1..];
+    if text_args.is_empty() {
+        eprintln!("string sub: missing string argument");
+        return Ok(1);
+    }
+    for arg in text_args {
+        let (start, end) = if let Some(colon_pos) = range_str.find(':') {
+            let start: usize = range_str[..colon_pos].parse().unwrap_or(0);
+            let end: usize = range_str[colon_pos + 1..].parse().unwrap_or(arg.len());
+            (start, end)
+        } else {
+            let start: usize = range_str.parse().unwrap_or(0);
+            (start, arg.len())
+        };
+        let clamped_start = start.min(arg.len());
+        let clamped_end = end.min(arg.len());
+        let result = if clamped_start < clamped_end {
+            &arg[clamped_start..clamped_end]
+        } else {
+            ""
+        };
+        println!("{result}");
+    }
+    Ok(0)
+}
+
+fn string_match(args: &[String]) -> Result<i32, ExecError> {
+    if args.len() < 2 {
+        eprintln!("string match: needs PATTERN and STRING");
+        return Ok(1);
+    }
+    let pattern = &args[0];
+    let mut exit_code = 0;
+
+    // Check if pattern starts with -r for regex
+    if pattern == "-r" {
+        if args.len() < 3 {
+            eprintln!("string match: -r needs PATTERN and STRING");
+            return Ok(1);
+        }
+        let re_pattern = &args[1];
+        for arg in &args[2..] {
+            if let Ok(re) = regex::Regex::new(re_pattern) {
+                if let Some(caps) = re.captures(arg) {
+                    for i in 1..caps.len() {
+                        if let Some(m) = caps.get(i) {
+                            println!("{}", m.as_str());
+                        }
+                    }
+                } else {
+                    exit_code = 1;
+                }
+            } else {
+                eprintln!("string match: invalid regex '{re_pattern}'");
+                return Ok(1);
+            }
+        }
+    } else {
+        for arg in &args[1..] {
+            if glob_match(pattern, arg) {
+                println!("{arg}");
+            } else {
+                exit_code = 1;
+            }
+        }
+    }
+    Ok(exit_code)
+}
+
+fn string_replace(args: &[String]) -> Result<i32, ExecError> {
+    if args.len() < 3 {
+        eprintln!("string replace: needs PATTERN REPLACEMENT STRING");
+        return Ok(1);
+    }
+    let pattern = &args[0];
+    let replacement = &args[1];
+    for arg in &args[2..] {
+        if let Some(re) = regex::Regex::new(pattern).ok() {
+            let result = re.replace(arg, replacement.as_str());
+            println!("{result}");
+        } else {
+            let result = arg.replacen(pattern.as_str(), replacement.as_str(), 1);
+            println!("{result}");
+        }
+    }
+    Ok(0)
+}
+
+fn string_trim(args: &[String]) -> Result<i32, ExecError> {
+    let mut chars_to_trim: &str = " \t\n\r";
+    let mut start = 0;
+
+    if !args.is_empty() && args[0] == "-l" {
+        chars_to_trim = if args.len() > 1 { &args[1] } else { " \t\n\r" };
+        start = 1;
+    } else if !args.is_empty() && args[0] == "-r" {
+        chars_to_trim = if args.len() > 1 { &args[1] } else { " \t\n\r" };
+        start = 1;
+    } else if !args.is_empty() && args[0] == "-c" {
+        chars_to_trim = if args.len() > 1 { &args[1] } else { " \t\n\r" };
+        start = 1;
+    }
+
+    let text_args = &args[start..];
+    if text_args.is_empty() {
+        eprintln!("string trim: missing argument");
+        return Ok(1);
+    }
+
+    for arg in text_args {
+        println!("{}", arg.trim_matches(|c| chars_to_trim.contains(c)));
+    }
+    Ok(0)
+}
+
+fn string_split(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string split: missing separator");
+        return Ok(1);
+    }
+    let separator = &args[0];
+    let text_args = &args[1..];
+    if text_args.is_empty() {
+        eprintln!("string split: missing string argument");
+        return Ok(1);
+    }
+    for arg in text_args {
+        for part in arg.split(separator.as_str()) {
+            println!("{part}");
+        }
+    }
+    Ok(0)
+}
+
+fn string_join(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string join: missing separator");
+        return Ok(1);
+    }
+    let separator = &args[0];
+    let text_args = &args[1..];
+    if text_args.is_empty() {
+        eprintln!("string join: missing string argument");
+        return Ok(1);
+    }
+    let result = text_args.join(separator);
+    println!("{result}");
+    Ok(0)
+}
+
+fn string_repeat(args: &[String]) -> Result<i32, ExecError> {
+    if args.len() < 2 {
+        eprintln!("string repeat: needs COUNT and STRING");
+        return Ok(1);
+    }
+    let count: usize = args[0].parse().unwrap_or(0);
+    for arg in &args[1..] {
+        let result: String = arg.repeat(count);
+        print!("{result}");
+    }
+    if args.len() > 2 {
+        println!();
+    }
+    Ok(0)
+}
+
+fn string_escape(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string escape: missing argument");
+        return Ok(1);
+    }
+    for arg in args {
+        let escaped = arg
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t");
+        println!("{escaped}");
+    }
+    Ok(0)
+}
+
+fn string_lower(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string lower: missing argument");
+        return Ok(1);
+    }
+    for arg in args {
+        println!("{}", arg.to_lowercase());
+    }
+    Ok(0)
+}
+
+fn string_upper(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string upper: missing argument");
+        return Ok(1);
+    }
+    for arg in args {
+        println!("{}", arg.to_uppercase());
+    }
+    Ok(0)
+}
+
+fn string_capital(args: &[String]) -> Result<i32, ExecError> {
+    if args.is_empty() {
+        eprintln!("string capital: missing argument");
+        return Ok(1);
+    }
+    for arg in args {
+        let mut chars = arg.chars();
+        if let Some(first) = chars.next() {
+            let rest: String = chars.collect();
+            println!("{}{}", first.to_uppercase(), rest.to_lowercase());
+        } else {
+            println!();
+        }
+    }
+    Ok(0)
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    glob_match_inner(&p, &t)
+}
+
+fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
+    let mut pi = 0;
+    let mut ti = 0;
+    let mut star_pi = usize::MAX;
+    let mut star_ti = 0;
+
+    while ti < text.len() {
+        if pi < pattern.len() && (pattern[pi] == '?' || pattern[pi] == text[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < pattern.len() && pattern[pi] == '*' {
+            star_pi = pi;
+            star_ti = ti;
+            pi += 1;
+        } else if star_pi != usize::MAX {
+            pi = star_pi + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+
+    while pi < pattern.len() && pattern[pi] == '*' {
+        pi += 1;
+    }
+
+    pi == pattern.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,7 +812,6 @@ mod tests {
         assert!(list.iter().any(|(n, _)| *n == "eval"));
         assert!(list.iter().any(|(n, _)| *n == "test"));
     }
-
     #[test]
     fn test_test_cmd() {
         let mut env = ShellEnvironment::from_process();
@@ -511,7 +820,8 @@ mod tests {
         let result = execute("test", &[], &mut env, &mut aliases).unwrap();
         assert_eq!(result, Some(1));
         // test -z "" should return 0
-        let result = execute("test", &["-z".into(), "".into()], &mut env, &mut aliases).unwrap();
+        let result =
+            execute("test", &["-z".into(), "".into()], &mut env, &mut aliases).unwrap();
         assert_eq!(result, Some(0));
         // test -n "hello" should return 0
         let result = execute(
@@ -522,5 +832,110 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_is_builtin_string() {
+        assert!(is_builtin("string"));
+    }
+
+    #[test]
+    fn test_string_length() {
+        let mut env = ShellEnvironment::from_process();
+        let mut aliases = AliasMap::new();
+        let result = execute(
+            "string",
+            &["length".into(), "hello".into()],
+            &mut env,
+            &mut aliases,
+        )
+        .unwrap();
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_string_lower() {
+        let mut env = ShellEnvironment::from_process();
+        let mut aliases = AliasMap::new();
+        let result = execute(
+            "string",
+            &["lower".into(), "HELLO".into()],
+            &mut env,
+            &mut aliases,
+        )
+        .unwrap();
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_string_upper() {
+        let mut env = ShellEnvironment::from_process();
+        let mut aliases = AliasMap::new();
+        let result = execute(
+            "string",
+            &["upper".into(), "hello".into()],
+            &mut env,
+            &mut aliases,
+        )
+        .unwrap();
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_string_join() {
+        let mut env = ShellEnvironment::from_process();
+        let mut aliases = AliasMap::new();
+        let result = execute(
+            "string",
+            &[
+                "join".into(),
+                ",".into(),
+                "a".into(),
+                "b".into(),
+                "c".into(),
+            ],
+            &mut env,
+            &mut aliases,
+        )
+        .unwrap();
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_string_split() {
+        let mut env = ShellEnvironment::from_process();
+        let mut aliases = AliasMap::new();
+        let result = execute(
+            "string",
+            &["split".into(), ",".into(), "a,b,c".into()],
+            &mut env,
+            &mut aliases,
+        )
+        .unwrap();
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_string_unknown_subcommand() {
+        let mut env = ShellEnvironment::from_process();
+        let mut aliases = AliasMap::new();
+        let result = execute(
+            "string",
+            &["bogus".into()],
+            &mut env,
+            &mut aliases,
+        )
+        .unwrap();
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn test_glob_match() {
+        assert!(glob_match("*", "hello"));
+        assert!(glob_match("h*llo", "hello"));
+        assert!(glob_match("h?llo", "hello"));
+        assert!(!glob_match("h?llo", "hllo"));
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(!glob_match("*.rs", "main.c"));
     }
 }
