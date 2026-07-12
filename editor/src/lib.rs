@@ -31,8 +31,13 @@ impl RustyHighlighter for AsterHelper {
         Cow::Owned(aster_highlight::Highlighter::new().highlight(line, &*self.theme))
     }
 
-    fn highlight_char(&self, _line: &str, _pos: usize, _forced: bool) -> bool {
-        true
+    fn highlight_char(&self, _line: &str, _pos: usize, forced: bool) -> bool {
+        forced
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        // Fish-style dim gray ghost text for autosuggestion
+        Cow::Owned(format!("\x1b[38;5;243m{hint}\x1b[0m"))
     }
 }
 
@@ -67,21 +72,35 @@ impl Hinter for AsterHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        // Fish-style: show most recent history command when input is empty
         if line.is_empty() {
-            return None;
+            return self.history_cache.last().map(|entry| {
+                if entry.is_empty() {
+                    "\n".to_string()
+                } else {
+                    format!("\n{entry}")
+                }
+            });
         }
 
         let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Search history in reverse chronological order for prefix match
         if let Some(entry) = self
             .history_cache
             .iter()
             .rev()
-            .find(|cmd| cmd.starts_with(trimmed))
+            .find(|cmd| cmd.starts_with(trimmed) && cmd.as_str() != trimmed)
         {
-            if entry != trimmed {
-                return Some(entry[trimmed.len()..].to_string());
+            let suffix = &entry[trimmed.len()..];
+            if !suffix.is_empty() {
+                return Some(suffix.to_string());
             }
         }
+
         None
     }
 }
@@ -127,6 +146,16 @@ impl EditorWrapper {
             hist.entries().iter().map(|e| e.command.clone()).collect()
         } else {
             Vec::new()
+        }
+    }
+
+    /// Updates the hint cache with a new command (called after each command execution).
+    pub fn update_history_cache(&mut self, entry: &str) {
+        if let Some(helper) = self.editor.helper_mut() {
+            // Avoid duplicates at the end
+            if helper.history_cache.last().map(|s| s.as_str()) != Some(entry) {
+                helper.history_cache.push(entry.to_string());
+            }
         }
     }
 
@@ -328,15 +357,14 @@ mod tests {
             theme: Box::new(aster_theme::DefaultTheme),
             history_cache: Vec::new(),
         };
-        assert!(
-            Hinter::hint(
-                &helper,
-                "",
-                0,
-                &rustyline::Context::new(&rustyline::history::MemHistory::new())
-            )
-            .is_none()
+        // Empty input with empty history returns None (or a newline if history has entries)
+        let result = Hinter::hint(
+            &helper,
+            "",
+            0,
+            &rustyline::Context::new(&rustyline::history::MemHistory::new()),
         );
+        assert!(result.is_none());
     }
 
     #[test]

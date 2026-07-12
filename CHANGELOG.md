@@ -4,6 +4,23 @@ All notable changes to AsterShell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.0] - 2026-07-12
+
+### Fixed
+- **Autosuggestion critical bug**: history_cache was never updated during session — commands typed in current session were invisible to hints
+- **highlight_char()** now respects `forced` parameter (was unconditionally returning `true`)
+- **Highlight hint styling**: fish-style dim gray ghost text for autosuggestions
+
+### Added
+- **Fish-style empty-line suggestion**: most recent history command shown when input is empty
+- **Smart cd**: `..N` goes up N directories (e.g., `cd ..3` = `cd ../../../`), `..` works as expected
+- **Inline math**: `=2+3` evaluates and prints `5` (built-in calculator)
+- **Command duration in prompt**: `[1.5s]` shown for commands taking >100ms (new `duration` segment)
+- **History cache live update**: `update_history_cache()` method on EditorWrapper, called after each command
+
+### Changed
+- Version bumped to 0.2.0
+
 ## [0.1.0] - 2026-07-12
 
 ### Added

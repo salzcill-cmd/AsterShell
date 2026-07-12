@@ -18,6 +18,7 @@ struct Shell {
     history: History,
     ctx: ExecContext,
     running: Arc<AtomicBool>,
+    last_cmd_duration: std::time::Duration,
 }
 
 impl Shell {
@@ -51,6 +52,7 @@ impl Shell {
                 ..ExecContext::default()
             },
             running,
+            last_cmd_duration: std::time::Duration::ZERO,
         })
     }
 
@@ -129,7 +131,7 @@ impl Shell {
             }
 
             // Print prompt
-            let prompt_str = prompt.render(self.ctx.last_exit_code);
+            let prompt_str = prompt.render(self.ctx.last_exit_code, self.last_cmd_duration);
 
             // Read line
             let input = match editor.readline(&prompt_str) {
@@ -166,6 +168,10 @@ impl Shell {
             // Record history
             self.history.add(trimmed.to_string());
             let _ = editor.add_history_entry(trimmed);
+            editor.update_history_cache(trimmed);
+
+            // Measure command execution duration
+            let cmd_start = std::time::Instant::now();
 
             // Handle history command
             if trimmed == "history" {
@@ -179,6 +185,9 @@ impl Shell {
             if let Err(e) = self.execute_line(trimmed) {
                 eprintln!("aster: {e}");
             }
+
+            // Record command duration
+            self.last_cmd_duration = cmd_start.elapsed();
         }
 
         // Save history on exit

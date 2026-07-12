@@ -859,6 +859,14 @@ impl Executor {
             _ => {}
         }
 
+        // Inline math: =2+3 prints 5
+        if expanded_cmd.name.starts_with('=') {
+            let expr = &expanded_cmd.name[1..];
+            let result = eval_arithmetic(expr, ctx)?;
+            println!("{result}");
+            return Ok(ExecOutcome::Success(0));
+        }
+
         // Check for function invocation
         if let Some(body) = ctx.functions.get(&expanded_cmd.name).cloned() {
             let was_in_function = ctx.in_function;
@@ -935,6 +943,38 @@ impl Executor {
             let rest = &args[0][1..];
             let home = dirs::home_dir().ok_or_else(|| ExecError::CdError("HOME not set".into()))?;
             home.join(rest)
+        } else if args[0] == ".." || args[0] == "." {
+            // Standard: .. goes up 1, . stays
+            let current = env::current_dir().map_err(|e| ExecError::DirError(e.to_string()))?;
+            if args[0] == ".." {
+                current.parent().unwrap_or(&current).to_path_buf()
+            } else {
+                current
+            }
+        } else if args[0].starts_with("..") && args[0].len() > 2 {
+            // Smart cd: ..N goes up N directories (e.g., ..3 = cd ../../../)
+            let n_str = &args[0][2..];
+            if let Ok(n) = n_str.parse::<usize>() {
+                if n > 0 && n <= 10 {
+                    let mut current =
+                        env::current_dir().map_err(|e| ExecError::DirError(e.to_string()))?;
+                    for _ in 0..n {
+                        current = current
+                            .parent()
+                            .unwrap_or(&current)
+                            .to_path_buf();
+                    }
+                    current
+                } else {
+                    return Err(ExecError::CdError(format!(
+                        "{}: invalid directory count (1-10)",
+                        args[0]
+                    ))
+                    .into());
+                }
+            } else {
+                PathBuf::from(&args[0])
+            }
         } else {
             PathBuf::from(&args[0])
         };

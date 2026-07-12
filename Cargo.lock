@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "aster"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-builtins",
  "aster-completion",
@@ -46,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "aster-builtins"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-shell-core",
  "aster-utils",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "aster-completion"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-builtins",
  "aster-shell-core",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "aster-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-shell-core",
  "dirs",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "aster-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-completion",
  "aster-config",
@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "aster-executor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-builtins",
  "aster-lexer",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "aster-highlight"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-lexer",
  "aster-shell-core",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "aster-history"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-config",
  "aster-shell-core",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "aster-lexer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-shell-core",
  "log",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "aster-parser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-lexer",
  "aster-shell-core",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "aster-plugin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-shell-core",
  "dirs",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "aster-prompt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aster-config",
  "aster-shell-core",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "aster-shell-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glob",
  "log",
@@ -210,14 +210,14 @@ dependencies = [
 
 [[package]]
 name = "aster-theme"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "aster-utils"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "log",

@@ -60,9 +60,9 @@ impl Prompt {
         }
     }
 
-    /// Renders the full prompt string for the given last exit code.
+    /// Renders the full prompt string for the given last exit code and command duration.
     #[must_use]
-    pub fn render(&self, last_exit_code: i32) -> String {
+    pub fn render(&self, last_exit_code: i32, last_duration: std::time::Duration) -> String {
         let mut result = String::new();
 
         for segment in &self.segments {
@@ -88,6 +88,11 @@ impl Prompt {
                 }
                 "time" => {
                     result.push_str(&self.render_time());
+                }
+                "duration" => {
+                    if !last_duration.is_zero() && last_duration.as_millis() > 100 {
+                        result.push_str(&self.render_duration(last_duration));
+                    }
                 }
                 _ => {}
             }
@@ -136,6 +141,19 @@ impl Prompt {
         format!(" {}", style.paint(now.format("%H:%M:%S").to_string()))
     }
 
+    fn render_duration(&self, duration: std::time::Duration) -> String {
+        let style = Style::new().fg(AnsiColor::DarkGray);
+        let ms = duration.as_millis();
+        let text = if ms < 1000 {
+            format!("{ms}ms")
+        } else if ms < 60_000 {
+            format!("{:.1}s", duration.as_secs_f64())
+        } else {
+            format!("{:.0}m{:.0}s", ms / 60_000, (ms % 60_000) / 1000)
+        };
+        format!(" {}", style.paint(format!("[{text}]")))
+    }
+
     fn render_symbol(&self) -> String {
         let style = Style::new().fg(AnsiColor::Magenta).bold();
         format!("{} ", style.paint(&self.symbol))
@@ -179,35 +197,49 @@ mod tests {
     #[test]
     fn test_prompt_render_success() {
         let p = Prompt::default();
-        let rendered = p.render(0);
+        let rendered = p.render(0, std::time::Duration::ZERO);
         assert!(rendered.contains('\u{276f}'));
     }
 
     #[test]
     fn test_prompt_render_failure() {
         let p = Prompt::default();
-        let rendered = p.render(1);
+        let rendered = p.render(1, std::time::Duration::ZERO);
         assert!(rendered.contains('\u{2717}') || rendered.contains("[1]"));
     }
 
     #[test]
     fn test_prompt_no_status() {
         let p = Prompt::new(false, "!".into(), vec!["dir".into()]);
-        let rendered = p.render(1);
+        let rendered = p.render(1, std::time::Duration::ZERO);
         assert!(rendered.contains('!'));
     }
 
     #[test]
     fn test_prompt_user_segment() {
         let p = Prompt::new(true, ">".into(), vec!["user".into()]);
-        let rendered = p.render(0);
+        let rendered = p.render(0, std::time::Duration::ZERO);
         assert!(rendered.contains('@'));
     }
 
     #[test]
     fn test_prompt_time_segment() {
         let p = Prompt::new(true, ">".into(), vec!["time".into()]);
-        let rendered = p.render(0);
+        let rendered = p.render(0, std::time::Duration::ZERO);
         assert!(rendered.contains(':'));
+    }
+
+    #[test]
+    fn test_prompt_duration_shows_for_slow() {
+        let p = Prompt::new(true, ">".into(), vec!["duration".into()]);
+        let rendered = p.render(0, std::time::Duration::from_millis(1500));
+        assert!(rendered.contains("1.5s"));
+    }
+
+    #[test]
+    fn test_prompt_duration_hides_for_fast() {
+        let p = Prompt::new(true, ">".into(), vec!["duration".into()]);
+        let rendered = p.render(0, std::time::Duration::from_millis(50));
+        assert!(!rendered.contains("50ms"));
     }
 }
