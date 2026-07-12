@@ -20,6 +20,30 @@ fn run(input: &str) -> Result<(i32, ExecContext), String> {
     Ok((code, ctx))
 }
 
+fn run_output(input: &str) -> String {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("aster")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn aster");
+
+    let stdin = child.stdin.as_mut().expect("failed to open stdin");
+    writeln!(stdin, "{input}").expect("failed to write input");
+    writeln!(stdin, "exit").expect("failed to write exit");
+
+    let output = child.wait_with_output().expect("failed to wait for aster");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    stdout
+        .lines()
+        .filter(|line| !line.starts_with("aster "))
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
 // ---------------------------------------------------------------------------
 // 1. Basic commands
 // ---------------------------------------------------------------------------
@@ -460,4 +484,65 @@ fn test_nested_case_patterns() {
 fn test_function_return_code() {
     let (code, _) = run("function fail { false ; } ; fail").unwrap();
     assert_eq!(code, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Expansion stress tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_nested_command_substitution() {
+    let (code, ctx) = run("x=$(echo $(echo hello))").unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(ctx.variables.get("x").map(String::as_str), Some("hello"));
+}
+
+#[test]
+fn test_parameter_expansion_default() {
+    let (code, ctx) = run("x=${HOME:-fallback}").unwrap();
+    assert_eq!(code, 0);
+    let val = ctx.variables.get("x").unwrap();
+    assert!(val == "/home/izza" || val == "fallback",
+        "expected HOME or fallback, got {val}");
+}
+
+#[test]
+fn test_parameter_expansion_unset_default() {
+    let (code, ctx) = run("x=${ASTER_TEST_UNSET_VAR:-fallback_value}").unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(ctx.variables.get("x").map(String::as_str), Some("fallback_value"));
+}
+
+#[test]
+fn test_brace_range_expansion_e2e() {
+    let output = run_output("echo {1..5}");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "1 2 3 4 5", "got: {trimmed}");
+}
+
+#[test]
+fn test_pipe_and_combo() {
+    let (code, _) = run("echo abc | grep a && echo ok").unwrap();
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn test_for_loop_with_brace_expansion() {
+    let (code, ctx) = run("for i in {1..3}; do x=$i; done").unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(ctx.variables.get("x").map(String::as_str), Some("3"));
+}
+
+#[test]
+fn test_arithmetic_expansion_e2e() {
+    let (code, ctx) = run("x=$((2 + 3))").unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(ctx.variables.get("x").map(String::as_str), Some("5"));
+}
+
+#[test]
+fn test_heredoc_execution() {
+    let output = run_output("cat <<EOF\nhello world\nEOF");
+    let trimmed = output.trim();
+    assert_eq!(trimmed, "hello world", "got: {trimmed}");
 }
