@@ -31,8 +31,8 @@ impl RustyHighlighter for AsterHelper {
         Cow::Owned(aster_highlight::Highlighter::new().highlight(line, &*self.theme))
     }
 
-    fn highlight_char(&self, _line: &str, _pos: usize, forced: bool) -> bool {
-        forced
+    fn highlight_char(&self, _line: &str, _pos: usize, _forced: bool) -> bool {
+        true
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
