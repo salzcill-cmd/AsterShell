@@ -1,0 +1,23 @@
+name        = "cargo-dev"
+version     = "0.1.0"
+description = "Cargo workflow shortcuts for Rust development"
+enabled     = true
+
+[aliases]
+cb   = "cargo build"
+cr   = "cargo run"
+ct   = "cargo test"
+cbr  = "cargo build --release"
+crr  = "cargo run --release"
+ca   = "cargo add"
+cc   = "cargo clippy --workspace --all-targets"
+cf   = "cargo fmt --all --check"
+cdoc = "cargo doc --open"
+cup  = "cargo update"
+cclr = "cargo clean && cargo build --release"
+cw   = "cargo watch -x check -x test"
+ctarp = "cargo tarpaulin --workspace --out Html"
+ccov = "cargo tarpaulin --skip-clean"
+cunaudit = "cargo audit"
+cpatch = "cargo update -p"
+crel = "cargo release --no-confirm"
