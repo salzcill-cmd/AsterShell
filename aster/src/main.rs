@@ -32,6 +32,11 @@ impl Shell {
             aliases.insert(name, value);
         }
 
+        let mut abbreviations = std::collections::HashMap::new();
+        for (name, value) in &config.abbreviations {
+            abbreviations.insert(name.clone(), value.clone());
+        }
+
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
         if ctrlc::set_handler(move || {
@@ -49,6 +54,7 @@ impl Shell {
                 last_exit_code: 0,
                 prev_dir: None,
                 aliases,
+                abbreviations,
                 ..ExecContext::default()
             },
             running,

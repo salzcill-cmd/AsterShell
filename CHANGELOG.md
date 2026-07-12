@@ -4,6 +4,23 @@ All notable changes to AsterShell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.3.0] - 2026-07-12
+
+### Added
+- **Rich git prompt**: branch + dirty status `*` + ahead/behind `↑2↓1` + staged/untracked counts
+- **Abbreviation system**: fish-style abbreviations via `[abbreviations]` in config.toml
+  Example: `gc = "git commit -m"` → typing `gc` expands to `git commit -m` before execution
+- **Smart command-not-found**: Levenshtein distance suggestions
+  Example: `gitx` → "did you mean `git`?"
+- **Levenshtein distance function**: edit distance for fuzzy matching
+
+### Removed
+- Dead `git2` dependency (was in Cargo.toml but never imported)
+
+### Changed
+- Version bumped to 0.3.0
+- Refactored `execute_simple` → `dispatch_simple` for abbreviation support
+
 ## [0.2.0] - 2026-07-12
 
 ### Fixed

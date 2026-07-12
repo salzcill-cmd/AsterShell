@@ -4,8 +4,20 @@
 //! hostname, current directory, git branch, exit status, and more.
 
 use std::path::PathBuf;
+use std::process::Command;
 
 use nu_ansi_term::{Color as AnsiColor, Style};
+
+/// Rich git status information for the prompt.
+#[derive(Debug, Clone, Default)]
+struct GitStatus {
+    branch: String,
+    dirty: bool,
+    ahead: u32,
+    behind: u32,
+    staged: u32,
+    untracked: u32,
+}
 
 /// Renders the shell prompt.
 #[derive(Debug, Clone)]
@@ -60,6 +72,71 @@ impl Prompt {
         }
     }
 
+    /// Returns rich git status if inside a git repo.
+    fn git_status() -> Option<GitStatus> {
+        let cwd = std::env::current_dir().ok()?;
+
+        let output = Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(&cwd)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let branch = Self::find_git_branch(&cwd)?;
+
+        let mut status = GitStatus {
+            branch,
+            ..GitStatus::default()
+        };
+
+        if let Ok(output) = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&cwd)
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if line.len() < 2 {
+                    continue;
+                }
+                let index_status = line.as_bytes()[0];
+                let worktree_status = line.as_bytes()[1];
+
+                if index_status != b' ' && index_status != b'?' {
+                    status.staged += 1;
+                    status.dirty = true;
+                }
+                if worktree_status != b' ' && worktree_status != b'?' {
+                    status.dirty = true;
+                }
+                if index_status == b'?' && worktree_status == b'?' {
+                    status.untracked += 1;
+                    status.dirty = true;
+                }
+            }
+        }
+
+        if let Ok(output) = Command::new("git")
+            .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+            .current_dir(&cwd)
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let parts: Vec<&str> = stdout.trim().split('\t').collect();
+                if parts.len() == 2 {
+                    status.ahead = parts[0].parse().unwrap_or(0);
+                    status.behind = parts[1].parse().unwrap_or(0);
+                }
+            }
+        }
+
+        Some(status)
+    }
+
     /// Renders the full prompt string for the given last exit code and command duration.
     #[must_use]
     pub fn render(&self, last_exit_code: i32, last_duration: std::time::Duration) -> String {
@@ -77,8 +154,8 @@ impl Prompt {
                     result.push_str(&self.render_dir());
                 }
                 "git" => {
-                    if let Some(branch) = Self::git_branch() {
-                        result.push_str(&self.render_git(&branch));
+                    if let Some(status) = Self::git_status() {
+                        result.push_str(&self.render_git(&status));
                     }
                 }
                 "status" => {
@@ -98,7 +175,6 @@ impl Prompt {
             }
         }
 
-        // If no segments produced anything, use legacy rendering
         if result.is_empty() {
             result = self.render_legacy(last_exit_code);
         }
@@ -125,9 +201,55 @@ impl Prompt {
         format!("{}", style.paint(dir))
     }
 
-    fn render_git(&self, branch: &str) -> String {
-        let style = Style::new().fg(AnsiColor::Magenta);
-        format!(" {}", style.paint(format!("({branch})")))
+    fn render_git(&self, status: &GitStatus) -> String {
+        let branch_style = Style::new().fg(AnsiColor::Magenta);
+        let dirty_style = Style::new().fg(AnsiColor::Yellow);
+        let ahead_style = Style::new().fg(AnsiColor::Green);
+        let behind_style = Style::new().fg(AnsiColor::Red);
+
+        let dirty_mark = if status.dirty {
+            format!("{}", dirty_style.paint("*"))
+        } else {
+            String::new()
+        };
+
+        let mut sync_info = String::new();
+        if status.ahead > 0 {
+            sync_info.push_str(&format!(
+                "{}",
+                ahead_style.paint(format!("\u{2191}{}", status.ahead))
+            ));
+        }
+        if status.behind > 0 {
+            sync_info.push_str(&format!(
+                "{}",
+                behind_style.paint(format!("\u{2193}{}", status.behind))
+            ));
+        }
+
+        let extra = if status.staged > 0 || status.untracked > 0 {
+            let mut parts = Vec::new();
+            if status.staged > 0 {
+                parts.push(format!("+{}", status.staged));
+            }
+            if status.untracked > 0 {
+                parts.push(format!("?{}", status.untracked));
+            }
+            format!(" {}", parts.join(" "))
+        } else {
+            String::new()
+        };
+
+        format!(
+            " {}",
+            branch_style.paint(format!(
+                "({branch}{dirty}{sync}{extra})",
+                branch = status.branch,
+                dirty = dirty_mark,
+                sync = sync_info,
+                extra = extra
+            ))
+        )
     }
 
     fn render_status(&self, code: i32) -> String {
@@ -241,5 +363,12 @@ mod tests {
         let p = Prompt::new(true, ">".into(), vec!["duration".into()]);
         let rendered = p.render(0, std::time::Duration::from_millis(50));
         assert!(!rendered.contains("50ms"));
+    }
+
+    #[test]
+    fn test_git_branch_detection() {
+        if let Some(branch) = Prompt::git_branch() {
+            assert!(!branch.is_empty());
+        }
     }
 }

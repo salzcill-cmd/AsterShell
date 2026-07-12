@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["AsterShell Contributors"]
@@ -36,20 +36,20 @@ exclude = [".github/", "docs/", "scripts/"]
 
 [workspace.dependencies]
 # Internal crates
-aster-shell-core = { path = "shell-core", version = "0.2.0" }
-aster-utils = { path = "utils", version = "0.2.0" }
-aster-config = { path = "config", version = "0.2.0" }
-aster-parser = { path = "parser", version = "0.2.0" }
-aster-lexer = { path = "lexer", version = "0.2.0" }
-aster-executor = { path = "executor", version = "0.2.0" }
-aster-prompt = { path = "prompt", version = "0.2.0" }
-aster-history = { path = "history", version = "0.2.0" }
-aster-completion = { path = "completion", version = "0.2.0" }
-aster-highlight = { path = "highlight", version = "0.2.0" }
-aster-plugin = { path = "plugin", version = "0.2.0" }
-aster-builtins = { path = "builtins", version = "0.2.0" }
-aster-theme = { path = "theme", version = "0.2.0" }
-aster-editor = { path = "editor", version = "0.2.0" }
+aster-shell-core = { path = "shell-core", version = "0.3.0" }
+aster-utils = { path = "utils", version = "0.3.0" }
+aster-config = { path = "config", version = "0.3.0" }
+aster-parser = { path = "parser", version = "0.3.0" }
+aster-lexer = { path = "lexer", version = "0.3.0" }
+aster-executor = { path = "executor", version = "0.3.0" }
+aster-prompt = { path = "prompt", version = "0.3.0" }
+aster-history = { path = "history", version = "0.3.0" }
+aster-completion = { path = "completion", version = "0.3.0" }
+aster-highlight = { path = "highlight", version = "0.3.0" }
+aster-plugin = { path = "plugin", version = "0.3.0" }
+aster-builtins = { path = "builtins", version = "0.3.0" }
+aster-theme = { path = "theme", version = "0.3.0" }
+aster-editor = { path = "editor", version = "0.3.0" }
 
 # External dependencies
 thiserror = "2"
@@ -69,7 +69,6 @@ unicode-width = "0.2"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 glob = "0.3"
-git2 = { version = "0.19", default-features = false, features = ["default"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

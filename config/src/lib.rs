@@ -27,6 +27,9 @@ pub struct Config {
     /// Alias definitions.
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// Abbreviation definitions (fish-style: expand inline before execution).
+    #[serde(default)]
+    pub abbreviations: HashMap<String, String>,
     /// Key binding overrides.
     #[serde(default)]
     pub keybindings: HashMap<String, String>,

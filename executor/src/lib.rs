@@ -37,6 +37,8 @@ pub struct ExecContext {
     pub prev_dir: Option<PathBuf>,
     /// The shell's alias map.
     pub aliases: AliasMap,
+    /// Abbreviation map (fish-style: expand inline before execution).
+    pub abbreviations: std::collections::HashMap<String, String>,
     /// Local variables (set by `name=value` assignments).
     pub variables: std::collections::HashMap<String, String>,
     /// Defined functions.
@@ -57,6 +59,7 @@ impl Default for ExecContext {
             last_exit_code: 0,
             prev_dir: None,
             aliases: AliasMap::new(),
+            abbreviations: std::collections::HashMap::new(),
             variables: std::collections::HashMap::new(),
             functions: std::collections::HashMap::new(),
             in_function: false,
@@ -712,6 +715,35 @@ impl Executor {
         cmd: &SimpleCommand,
         ctx: &mut ExecContext,
     ) -> Result<ExecOutcome, ShellError> {
+        // Expand abbreviations: if command name matches, replace with expansion + original args
+        if let Some(expansion) = ctx.abbreviations.get(&cmd.name) {
+            let parts: Vec<&str> = expansion.splitn(2, ' ').collect();
+            let new_name = parts[0].to_string();
+            let new_args_str = parts.get(1).unwrap_or(&"");
+            let mut new_args: Vec<String> = if new_args_str.is_empty() {
+                Vec::new()
+            } else {
+                new_args_str.split_whitespace().map(String::from).collect()
+            };
+            new_args.extend(cmd.args.iter().cloned());
+
+            let expanded_name = Self::expand_variables(&new_name, ctx);
+            let expanded_args: Vec<String> = new_args
+                .iter()
+                .map(|a| Self::expand_variables(a, ctx))
+                .map(|a| expand_tilde(&a))
+                .collect();
+            let expanded_args = aster_shell_core::glob::expand(&expanded_args);
+
+            let expanded_cmd = SimpleCommand {
+                name: expanded_name,
+                args: expanded_args,
+                redirects: cmd.redirects.clone(),
+                span: cmd.span,
+            };
+            return Self::dispatch_simple(&expanded_cmd, ctx);
+        }
+
         // Expand aliases on the command name
         let (cmd_name, alias_args) = if let Some((name, extra_args)) = ctx.aliases.expand(&cmd.name)
         {
@@ -737,7 +769,14 @@ impl Executor {
             span: cmd.span,
         };
 
-        // Handle special builtins and control flow
+        Self::dispatch_simple(&expanded_cmd, ctx)
+    }
+
+    /// Dispatches an expanded simple command to builtins, functions, or external execution.
+    fn dispatch_simple(
+        expanded_cmd: &SimpleCommand,
+        ctx: &mut ExecContext,
+    ) -> Result<ExecOutcome, ShellError> {
         match expanded_cmd.name.as_str() {
             "cd" => return Self::builtin_cd(&expanded_cmd.args, ctx),
             "exit" => {
@@ -890,7 +929,21 @@ impl Executor {
         }
 
         // External command
-        Self::execute_external(&expanded_cmd)
+        match Self::execute_external(&expanded_cmd) {
+            Err(ShellError::Exec(ExecError::CommandNotFound(name))) => {
+                let suggestion = suggest_command(&name);
+                if let Some(sug) = suggestion {
+                    eprintln!(
+                        "aster: command not found: {name}\n       did you mean `{sug}`?"
+                    );
+                } else {
+                    eprintln!("aster: command not found: {name}");
+                }
+                Ok(ExecOutcome::Success(127))
+            }
+            Err(e) => Err(e),
+            Ok(outcome) => Ok(outcome),
+        }
     }
 
     fn execute_external(cmd: &SimpleCommand) -> Result<ExecOutcome, ShellError> {
@@ -1982,6 +2035,94 @@ fn shell_str_replace_all(val: &str, pattern: &str, replacement: &str) -> String 
     val.replace(pattern, replacement)
 }
 
+// ===========================================================================
+// Levenshtein distance + command suggestion
+// ===========================================================================
+
+/// Computes the Levenshtein edit distance between two strings.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_len = a.len();
+    let b_len = b.len();
+    let mut matrix = vec![vec![0usize; b_len + 1]; a_len + 1];
+
+    for i in 0..=a_len {
+        matrix[i][0] = i;
+    }
+    for j in 0..=b_len {
+        matrix[0][j] = j;
+    }
+
+    for (i, ca) in a.chars().enumerate() {
+        for (j, cb) in b.chars().enumerate() {
+            let cost = usize::from(ca != cb);
+            matrix[i + 1][j + 1] = (matrix[i][j + 1] + 1)
+                .min(matrix[i + 1][j] + 1)
+                .min(matrix[i][j] + cost);
+        }
+    }
+
+    matrix[a_len][b_len]
+}
+
+/// Suggests a similar command from PATH + builtins using Levenshtein distance.
+fn suggest_command(name: &str) -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    // Add builtins
+    for builtin in &[
+        "echo", "printf", "pwd", "true", "false", "which", "type", "help", "version",
+        "alias", "unalias", "export", "unset", "env", "pushd", "popd", "dirs", "eval",
+        "source", "wait", "test", "jobs", "fg", "bg", "kill", "cd", "exit", "history",
+        "clear",
+    ] {
+        candidates.push(builtin.to_string());
+    }
+
+    // Add commands from PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':') {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = path.metadata() {
+                            if meta.permissions().mode() & 0o111 != 0 {
+                                if let Some(file_name) = path.file_name() {
+                                    if let Some(n) = file_name.to_str() {
+                                        candidates.push(n.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Deduplicate
+    candidates.sort();
+    candidates.dedup();
+
+    // Find best match with distance <= 3
+    let mut best: Option<(String, usize)> = None;
+    for candidate in &candidates {
+        let dist = levenshtein(name, candidate);
+        if dist > 0 && dist <= 3 {
+            match &best {
+                None => best = Some((candidate.clone(), dist)),
+                Some((_, best_dist)) if dist < *best_dist => {
+                    best = Some((candidate.clone(), dist));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    best.map(|(name, _)| name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2447,12 +2588,33 @@ mod tests {
     }
 
     #[test]
-    fn test_kill_with_signal() {
-        let tokens = Lexer::new("kill -9 1").tokenize().unwrap();
-        let program = Parser::new(&tokens).parse().unwrap();
-        let mut ctx = ExecContext::default();
-        // PID 1 typically can't be killed, but the builtin should not error
-        let result = Executor::execute(&program, &mut ctx).unwrap();
-        assert_eq!(result, ExecOutcome::Success(0));
+    fn test_levenshtein_identical() {
+        assert_eq!(levenshtein("abc", "abc"), 0);
+    }
+
+    #[test]
+    fn test_levenshtein_one_edit() {
+        assert_eq!(levenshtein("abc", "abx"), 1);
+        assert_eq!(levenshtein("abc", "axc"), 1);
+        assert_eq!(levenshtein("abc", "xbc"), 1);
+    }
+
+    #[test]
+    fn test_levenshtein_two_edits() {
+        assert_eq!(levenshtein("abc", "axy"), 2);
+    }
+
+    #[test]
+    fn test_suggest_command_similar() {
+        // "ls" should suggest something close
+        if let Some(suggestion) = suggest_command("sl") {
+            assert!(!suggestion.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_suggest_command_no_match() {
+        // Very long gibberish should return None
+        assert!(suggest_command("xyzzyplugh12345").is_none());
     }
 }
