@@ -107,6 +107,10 @@ pub const fn builtin_list() -> &'static [(&'static str, &'static str)] {
         ("test", "Evaluate conditional expression"),
         ("string", "String manipulation (length, sub, match, etc.)"),
         ("compgen", "Generate completion candidates"),
+        ("shift", "Shift positional parameters"),
+        ("mapfile", "Read lines into array variable"),
+        ("dirname", "Strip last component from file name"),
+        ("basename", "Strip directory from file name"),
     ]
 }
 

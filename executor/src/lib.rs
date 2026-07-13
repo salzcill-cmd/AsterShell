@@ -11,7 +11,7 @@ use aster_shell_core::{
     Redirect, RedirectKind, SelectStmt, ShellError, SimpleCommand, Statement, UntilStmt, WhileStmt,
 };
 use std::env;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -1496,6 +1496,86 @@ impl Executor {
             }
             "compgen" => {
                 return Self::builtin_compgen(&expanded_cmd.args, ctx);
+            }
+            "shift" => {
+                let n: usize = expanded_cmd.args.first()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                if n > 0 && n <= ctx.positional_args.len() {
+                    ctx.positional_args.drain(..n);
+                } else if n > ctx.positional_args.len() {
+                    ctx.positional_args.clear();
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            "mapfile" | "readarray" => {
+                let mut var_name = "MAPFILE".to_string();
+                let mut skip = 0usize;
+                let mut count = 0usize;
+                let mut i = 0;
+                while i < expanded_cmd.args.len() {
+                    if expanded_cmd.args[i] == "-t" {
+                        // trim newlines
+                        i += 1;
+                    } else if expanded_cmd.args[i] == "-O" {
+                        i += 1;
+                        skip = expanded_cmd.args.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        i += 1;
+                    } else if expanded_cmd.args[i] == "-n" {
+                        i += 1;
+                        count = expanded_cmd.args.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        i += 1;
+                    } else if expanded_cmd.args[i].starts_with('-') {
+                        i += 1;
+                    } else {
+                        var_name = expanded_cmd.args[i].clone();
+                        i += 1;
+                    }
+                }
+                let mut lines = Vec::new();
+                let mut buf = String::new();
+                let _ = std::io::stdin().read_to_string(&mut buf);
+                for (idx, line) in buf.lines().enumerate() {
+                    if idx < skip {
+                        continue;
+                    }
+                    lines.push(line.to_string());
+                    if count > 0 && lines.len() >= count {
+                        break;
+                    }
+                }
+                ctx.variables.insert(var_name, lines.join("\n"));
+                return Ok(ExecOutcome::Success(0));
+            }
+            "dirname" => {
+                for arg in &expanded_cmd.args {
+                    let p = std::path::Path::new(arg.as_str());
+                    if let Some(parent) = p.parent() {
+                        println!("{}", parent.display());
+                    } else {
+                        println!(".");
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            "basename" => {
+                let args: Vec<&String> = expanded_cmd.args.iter().filter(|a| !a.starts_with('-')).collect();
+                if args.is_empty() {
+                    eprintln!("basename: missing operand");
+                    return Ok(ExecOutcome::Success(1));
+                }
+                let p = std::path::Path::new(args[0].as_str());
+                let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if args.len() >= 2 {
+                    if let Some(stripped) = name.strip_suffix(args[1].as_str()) {
+                        println!("{stripped}");
+                    } else {
+                        println!("{name}");
+                    }
+                } else {
+                    println!("{name}");
+                }
+                return Ok(ExecOutcome::Success(0));
             }
             _ => {}
         }
