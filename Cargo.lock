@@ -110,6 +110,7 @@ dependencies = [
  "dirs",
  "libc",
  "log",
+ "regex",
  "thiserror",
  "tracing",
 ]

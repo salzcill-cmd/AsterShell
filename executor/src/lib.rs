@@ -51,6 +51,12 @@ pub struct ExecContext {
     pub positional_args: Vec<String>,
     /// Job manager for background/foreground job control.
     pub jobs: aster_shell_core::jobs::JobManager,
+    /// Current line number for $LINENO.
+    pub current_line: u64,
+    /// Exit codes of individual commands in the last pipeline ($PIPESTATUS).
+    pub pipeline_exit_codes: Vec<i32>,
+    /// Shell start time for $SECONDS.
+    pub start_time: std::time::Instant,
 }
 
 impl Default for ExecContext {
@@ -66,6 +72,9 @@ impl Default for ExecContext {
             in_loop: false,
             positional_args: Vec::new(),
             jobs: aster_shell_core::jobs::JobManager::new(),
+            current_line: 1,
+            pipeline_exit_codes: Vec::new(),
+            start_time: std::time::Instant::now(),
         }
     }
 }
@@ -171,6 +180,10 @@ impl Executor {
                 let value = Self::expand_variables(&assign.value, ctx);
                 ctx.variables.insert(assign.name.clone(), value);
                 Ok(ExecOutcome::Success(0))
+            }
+            Statement::DoubleBracket(args, _span) => {
+                let result = Self::eval_double_bracket(args, ctx)?;
+                Ok(ExecOutcome::Success(i32::from(!result)))
             }
         }
     }
@@ -332,10 +345,135 @@ impl Executor {
 
     fn eval_condition(cond: &Statement, ctx: &mut ExecContext) -> Result<bool, ShellError> {
         match Self::execute_statement(cond, ctx)? {
-            ExecOutcome::Success(code) => Ok(code == 0),
-            ExecOutcome::Exit(code) => Ok(code == 0),
+            ExecOutcome::Success(code) | ExecOutcome::Exit(code) => Ok(code == 0),
             ExecOutcome::Break | ExecOutcome::Continue => Ok(false),
         }
+    }
+
+    /// Evaluates a `[[ ... ]]` double-bracket expression.
+    #[allow(clippy::too_many_lines)]
+    fn eval_double_bracket(args: &[String], ctx: &mut ExecContext) -> Result<bool, ShellError> {
+        if args.is_empty() {
+            return Ok(false);
+        }
+
+        // Handle negation: [[ ! ... ]]
+        if args[0] == "!" {
+            return Self::eval_double_bracket(&args[1..], ctx).map(|r| !r);
+        }
+
+        // Handle grouping with parentheses: [[ ( ... ) ]]
+        if args[0] == "(" {
+            // Find matching )
+            let mut depth = 1;
+            let mut end = args.len();
+            for (i, a) in args[1..].iter().enumerate() {
+                if a == "(" { depth += 1; }
+                if a == ")" { depth -= 1; }
+                if depth == 0 { end = i + 1; break; }
+            }
+            let inner = &args[1..end];
+            let rest = if end < args.len() { &args[end + 1..] } else { &[] };
+            let inner_result = Self::eval_double_bracket(inner, ctx)?;
+            if rest.is_empty() {
+                return Ok(inner_result);
+            }
+            // Handle && and || after grouping
+            if rest[0] == "&&" {
+                return if inner_result {
+                    Self::eval_double_bracket(&rest[1..], ctx)
+                } else {
+                    Ok(false)
+                };
+            }
+            if rest[0] == "||" {
+                return if inner_result {
+                    Ok(true)
+                } else {
+                    Self::eval_double_bracket(&rest[1..], ctx)
+                };
+            }
+            return Ok(inner_result);
+        }
+
+        // Handle && and || between expressions
+        if let Some(pos) = args.iter().position(|a| a == "&&" || a == "||") {
+            let left = Self::eval_double_bracket(&args[..pos], ctx)?;
+            let op = &args[pos];
+            let right_args = &args[pos + 1..];
+            if op == "&&" {
+                return if left {
+                    Self::eval_double_bracket(right_args, ctx)
+                } else {
+                    Ok(false)
+                };
+            } else {
+                return if left {
+                    Ok(true)
+                } else {
+                    Self::eval_double_bracket(right_args, ctx)
+                };
+            }
+        }
+
+        // Handle unary test operators
+        if args.len() == 2 {
+            let op = &args[0];
+            let val = Self::expand_variables(&args[1], ctx);
+            return match op.as_str() {
+                "-z" => Ok(val.is_empty()),
+                "-n" => Ok(!val.is_empty()),
+                "-f" => Ok(std::path::Path::new(val.as_str()).is_file()),
+                "-d" => Ok(std::path::Path::new(val.as_str()).is_dir()),
+                "-e" | "-r" | "-w" | "-x" => Ok(std::path::Path::new(val.as_str()).exists()),
+                "-s" => Ok(std::fs::metadata(val.as_str()).map(|m| m.len() > 0).unwrap_or(false)),
+                "-L" => Ok(std::path::Path::new(val.as_str()).is_symlink()),
+                _ => Ok(false),
+            };
+        }
+
+        // Handle binary comparison operators
+        if args.len() == 3 {
+            let left = Self::expand_variables(&args[0], ctx);
+            let op = &args[1];
+            let right = Self::expand_variables(&args[2], ctx);
+            return match op.as_str() {
+                "==" | "=" => {
+                    // Glob pattern matching: [[ *.txt == file.txt ]]
+                    if right.contains('*') || right.contains('?') || right.contains('[') {
+                        Ok(simple_glob_match(&right, &left))
+                    } else {
+                        Ok(left == right)
+                    }
+                }
+                "!=" => {
+                    if right.contains('*') || right.contains('?') || right.contains('[') {
+                        Ok(!simple_glob_match(&right, &left))
+                    } else {
+                        Ok(left != right)
+                    }
+                }
+                "=~" => {
+                    // Regex matching
+                    if let Ok(re) = regex::Regex::new(&right) {
+                        Ok(re.is_match(&left))
+                    } else {
+                        Ok(false)
+                    }
+                }
+                "-eq" => Ok(left.trim().parse::<i64>().unwrap_or(0) == right.trim().parse::<i64>().unwrap_or(0)),
+                "-ne" => Ok(left.trim().parse::<i64>().unwrap_or(0) != right.trim().parse::<i64>().unwrap_or(0)),
+                "-lt" => Ok(left.trim().parse::<i64>().unwrap_or(0) < right.trim().parse::<i64>().unwrap_or(0)),
+                "-le" => Ok(left.trim().parse::<i64>().unwrap_or(0) <= right.trim().parse::<i64>().unwrap_or(0)),
+                "-gt" => Ok(left.trim().parse::<i64>().unwrap_or(0) > right.trim().parse::<i64>().unwrap_or(0)),
+                "-ge" => Ok(left.trim().parse::<i64>().unwrap_or(0) >= right.trim().parse::<i64>().unwrap_or(0)),
+                _ => Ok(false),
+            };
+        }
+
+        // Fallback: treat as a string test (non-empty = true)
+        let expanded = Self::expand_variables(&args.join(" "), ctx);
+        Ok(!expanded.is_empty())
     }
 
     /// Expands variables in a string (e.g. `$HOME`, `$?`, `$1`),
@@ -546,14 +684,52 @@ impl Executor {
                             var_name.push(chars[i]);
                             i += 1;
                         }
-                        if let Some(val) = ctx.variables.get(&var_name) {
-                            result.push_str(val);
-                        } else {
-                            match std::env::var(&var_name) {
-                                Ok(val) => result.push_str(&val),
-                                Err(_) => {
-                                    result.push('$');
-                                    result.push_str(&var_name);
+                        match var_name.as_str() {
+                            "RANDOM" => {
+                                use std::collections::hash_map::RandomState;
+                                use std::hash::{BuildHasher, Hasher};
+                                let val = RandomState::new()
+                                    .build_hasher()
+                                    .finish() as u32
+                                    % 32768;
+                                result.push_str(&val.to_string());
+                            }
+                            "LINENO" => {
+                                result.push_str(&ctx.current_line.to_string());
+                            }
+                            "PIPESTATUS" => {
+                                if ctx.pipeline_exit_codes.is_empty() {
+                                    result.push_str("0");
+                                } else {
+                                    let statuses: Vec<String> = ctx
+                                        .pipeline_exit_codes
+                                        .iter()
+                                        .map(|c| c.to_string())
+                                        .collect();
+                                    result.push_str(&statuses.join(" "));
+                                }
+                            }
+                            "SECONDS" => {
+                                result.push_str(&ctx.start_time.elapsed().as_secs().to_string());
+                            }
+                            "EPOCHSECONDS" => {
+                                let secs = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+                                result.push_str(&secs.to_string());
+                            }
+                            _ => {
+                                if let Some(val) = ctx.variables.get(&var_name) {
+                                    result.push_str(val);
+                                } else {
+                                    match std::env::var(&var_name) {
+                                        Ok(val) => result.push_str(&val),
+                                        Err(_) => {
+                                            result.push('$');
+                                            result.push_str(&var_name);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -721,14 +897,18 @@ impl Executor {
             }
         }
 
+        let mut pipe_exit_codes = Vec::new();
         for mut child in children {
             let status = child.wait().map_err(|e| ExecError::SpawnFailed {
                 command: "pipeline".into(),
                 reason: e.to_string(),
             })?;
-            last_exit = status.code().unwrap_or(1);
+            let code = status.code().unwrap_or(1);
+            pipe_exit_codes.push(code);
+            last_exit = code;
         }
 
+        ctx.pipeline_exit_codes = pipe_exit_codes;
         ctx.last_exit_code = last_exit;
         Ok(ExecOutcome::Success(last_exit))
     }
@@ -2756,5 +2936,69 @@ mod tests {
     fn test_suggest_command_no_match() {
         // Very long gibberish should return None
         assert!(suggest_command("xyzzyplugh12345").is_none());
+    }
+
+    #[test]
+    fn test_double_bracket_string_eq() {
+        let mut ctx = ExecContext::default();
+        assert!(Executor::eval_double_bracket(&["hello".into(), "==".into(), "hello".into()], &mut ctx).unwrap());
+        assert!(!Executor::eval_double_bracket(&["hello".into(), "==".into(), "world".into()], &mut ctx).unwrap());
+    }
+
+    #[test]
+    fn test_double_bracket_string_ne() {
+        let mut ctx = ExecContext::default();
+        assert!(Executor::eval_double_bracket(&["hello".into(), "!=".into(), "world".into()], &mut ctx).unwrap());
+        assert!(!Executor::eval_double_bracket(&["hello".into(), "!=".into(), "hello".into()], &mut ctx).unwrap());
+    }
+
+    #[test]
+    fn test_double_bracket_glob() {
+        let mut ctx = ExecContext::default();
+        assert!(Executor::eval_double_bracket(&["hello.txt".into(), "==".into(), "*.txt".into()], &mut ctx).unwrap());
+        assert!(!Executor::eval_double_bracket(&["hello.rs".into(), "==".into(), "*.txt".into()], &mut ctx).unwrap());
+    }
+
+    #[test]
+    fn test_double_bracket_negation() {
+        let mut ctx = ExecContext::default();
+        assert!(!Executor::eval_double_bracket(&["!".into(), "hello".into(), "==".into(), "hello".into()], &mut ctx).unwrap());
+    }
+
+    #[test]
+    fn test_double_bracket_numeric() {
+        let mut ctx = ExecContext::default();
+        assert!(Executor::eval_double_bracket(&["5".into(), "-gt".into(), "3".into()], &mut ctx).unwrap());
+        assert!(Executor::eval_double_bracket(&["3".into(), "-lt".into(), "5".into()], &mut ctx).unwrap());
+        assert!(!Executor::eval_double_bracket(&["5".into(), "-lt".into(), "3".into()], &mut ctx).unwrap());
+    }
+
+    #[test]
+    fn test_double_bracket_file_tests() {
+        let mut ctx = ExecContext::default();
+        let manifest = std::path::PathBuf::from(std::env!("CARGO_MANIFEST_DIR"));
+        let cargo_toml = manifest.join("../Cargo.toml").canonicalize().unwrap();
+        let exec_src = manifest.join("src").canonicalize().unwrap();
+        assert!(Executor::eval_double_bracket(&["-f".into(), cargo_toml.to_string_lossy().into_owned()], &mut ctx).unwrap());
+        assert!(Executor::eval_double_bracket(&["-d".into(), exec_src.to_string_lossy().into_owned()], &mut ctx).unwrap());
+        assert!(Executor::eval_double_bracket(&["-e".into(), cargo_toml.to_string_lossy().into_owned()], &mut ctx).unwrap());
+        assert!(!Executor::eval_double_bracket(&["-e".into(), "/nonexistent_path_xyz".into()], &mut ctx).unwrap());
+    }
+
+    #[test]
+    fn test_double_bracket_and_or() {
+        let mut ctx = ExecContext::default();
+        assert!(Executor::eval_double_bracket(
+            &["hello".into(), "==".into(), "hello".into(), "&&".into(), "world".into(), "==".into(), "world".into()],
+            &mut ctx
+        ).unwrap());
+        assert!(!Executor::eval_double_bracket(
+            &["hello".into(), "==".into(), "hello".into(), "&&".into(), "world".into(), "==".into(), "foo".into()],
+            &mut ctx
+        ).unwrap());
+        assert!(Executor::eval_double_bracket(
+            &["hello".into(), "==".into(), "foo".into(), "||".into(), "world".into(), "==".into(), "world".into()],
+            &mut ctx
+        ).unwrap());
     }
 }

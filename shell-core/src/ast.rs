@@ -40,6 +40,8 @@ pub enum Statement {
     Compound(Vec<Self>, Span),
     /// Variable assignment.
     Assign(AssignStmt),
+    /// Double-bracket test `[[ ... ]]`.
+    DoubleBracket(Vec<String>, Span),
 }
 
 impl Statement {
@@ -59,6 +61,7 @@ impl Statement {
             Self::Break(s) | Self::Continue(s) => *s,
             Self::Compound(_, s) => *s,
             Self::Assign(s) => s.span,
+            Self::DoubleBracket(_, s) => *s,
         }
     }
 }
