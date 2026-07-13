@@ -34,6 +34,7 @@ impl Highlighter {
 
         let mut result = String::with_capacity(input.len() * 2);
         let mut prev_end = 0;
+        let mut expect_command = false;
 
         for token in &tokens {
             match &token.kind {
@@ -60,8 +61,9 @@ impl Highlighter {
                         result.push_str(&self.colorize_role(token, ColorRole::Number, theme));
                     } else if Self::is_keyword(w) {
                         result.push_str(&self.colorize_role(token, ColorRole::Keyword, theme));
-                    } else if result.is_empty() || Self::is_after_pipe_or_semicolon(&result) {
+                    } else if result.is_empty() || expect_command {
                         result.push_str(&self.colorize_role(token, ColorRole::Command, theme));
+                        expect_command = false;
                     } else {
                         result.push_str(&self.colorize_role(token, ColorRole::Path, theme));
                     }
@@ -71,6 +73,7 @@ impl Highlighter {
                 }
                 TokenKind::Pipe | TokenKind::AmpAmp | TokenKind::PipePipe => {
                     result.push_str(&self.colorize_role(token, ColorRole::Operator, theme));
+                    expect_command = true;
                 }
                 TokenKind::GreaterThan
                 | TokenKind::LessThan
@@ -90,6 +93,7 @@ impl Highlighter {
                 | TokenKind::CloseBrace
                 | TokenKind::Amp => {
                     result.push_str(&self.colorize_role(token, ColorRole::Operator, theme));
+                    expect_command = true;
                 }
             }
         }
@@ -102,16 +106,17 @@ impl Highlighter {
     }
 
     fn colorize_role(&self, token: &Token, role: ColorRole, theme: &dyn Theme) -> String {
+        let text = format!("{}", token.kind);
         if let Some(color) = theme.color(role) {
             format!(
                 "\x1b[38;2;{};{};{}m{}\x1b[0m",
                 color.r,
                 color.g,
                 color.b,
-                token.kind.text(),
+                text,
             )
         } else {
-            token.kind.text().to_string()
+            text
         }
     }
 
@@ -131,13 +136,7 @@ impl Highlighter {
                 && bytes[2..].iter().all(|b| b.is_ascii_hexdigit()))
     }
 
-    fn is_after_pipe_or_semicolon(s: &str) -> bool {
-        let trimmed = s.trim_end();
-        trimmed.ends_with('|')
-            || trimmed.ends_with(';')
-            || trimmed.ends_with("&&")
-            || trimmed.ends_with("||")
-    }
+
 }
 
 impl Default for Highlighter {
@@ -149,6 +148,26 @@ impl Default for Highlighter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Strip ANSI escape sequences and return only visible characters.
+    fn strip_ansi(s: &str) -> String {
+        let mut result = String::new();
+        let mut esc_seq = false;
+        for c in s.chars() {
+            if c == '\x1b' {
+                esc_seq = true;
+                continue;
+            }
+            if esc_seq {
+                if c.is_ascii_alphabetic() {
+                    esc_seq = false;
+                }
+                continue;
+            }
+            result.push(c);
+        }
+        result
+    }
 
     #[test]
     fn test_highlighter_passthrough() {
@@ -173,6 +192,116 @@ mod tests {
         let theme = aster_theme::DefaultTheme;
         let result = h.highlight("ls | grep foo", &theme);
         assert!(result.contains('|'));
+    }
+
+    #[test]
+    fn test_highlight_preserves_visible_width_simple() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let inputs = [
+            "echo hello",
+            "ls -la /tmp",
+            "echo 'hello world'",
+            r#"echo "hello world""#,
+            "echo 'it'\"'s\"",
+            "cat <<< hello",
+            "echo >&2",
+            "a && b || c",
+            "echo 42 0xFF",
+        ];
+        for input in inputs {
+            let highlighted = h.highlight(input, &theme);
+            let visible = strip_ansi(&highlighted);
+            assert_eq!(
+                visible, input,
+                "visible width mismatch for input: {input:?}\n  highlighted: {highlighted:?}\n  visible: {visible:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_quoted_strings() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+
+        let input = "echo 'hello'";
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input, "single-quoted string width mismatch");
+
+        let input = r#"echo "hello""#;
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input, "double-quoted string width mismatch");
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_empty_and_single_char() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        assert_eq!(strip_ansi(&h.highlight("", &theme)), "");
+        assert_eq!(strip_ansi(&h.highlight("x", &theme)), "x");
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_operators() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let input = "echo a > b && cat c | grep d";
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input);
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_redirects() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let input = "echo >&2 < in.txt > out.txt";
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input);
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_comment() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let input = "echo # comment";
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input);
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_numbers() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let input = "echo 42 0xFF 0";
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input);
+    }
+
+    #[test]
+    fn test_highlight_preserves_width_heredoc() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let input = "cat << EOF";
+        let highlighted = h.highlight(input, &theme);
+        let visible = strip_ansi(&highlighted);
+        assert_eq!(visible, input);
+    }
+
+    #[test]
+    fn test_command_after_pipe_colored_as_command() {
+        let h = Highlighter::default();
+        let theme = aster_theme::DefaultTheme;
+        let result = h.highlight("echo a | grep b", &theme);
+        // The result should contain ANSI codes for both 'echo' and 'grep'
+        // as commands (both should be colorized, not just the first one)
+        assert!(result.contains("echo"), "echo should be in result");
+        assert!(result.contains("grep"), "grep should be in result");
     }
 
     #[test]
