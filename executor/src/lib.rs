@@ -8,13 +8,15 @@ use aster_lexer::Lexer;
 use aster_parser::Parser;
 use aster_shell_core::{
     AliasMap, Atom, CaseStmt, ExecError, ForStmt, FunctionDef, Group, IfStmt, PipeExpr, Program,
-    Redirect, RedirectKind, ShellError, SimpleCommand, Statement, UntilStmt, WhileStmt,
+    Redirect, RedirectKind, SelectStmt, ShellError, SimpleCommand, Statement, UntilStmt, WhileStmt,
 };
 use std::env;
 use std::io::Write;
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+#[allow(unsafe_code)]
+use std::os::unix::process::CommandExt;
 
 /// Result of executing a program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +59,16 @@ pub struct ExecContext {
     pub pipeline_exit_codes: Vec<i32>,
     /// Shell start time for $SECONDS.
     pub start_time: std::time::Instant,
+    /// Signal handlers registered via `trap`.
+    pub trap_handlers: std::collections::HashMap<i32, String>,
+    /// The shell's own PID (for terminal control).
+    pub shell_pgid: i32,
+    /// Foreground process group ID (for terminal control).
+    pub foreground_pgid: Option<i32>,
+    /// PID of the most recently backgrounded process ($!).
+    pub last_background_pid: u32,
+    /// Current shell option flags ($-).
+    pub last_shell_options: String,
 }
 
 impl Default for ExecContext {
@@ -75,6 +87,11 @@ impl Default for ExecContext {
             current_line: 1,
             pipeline_exit_codes: Vec::new(),
             start_time: std::time::Instant::now(),
+            trap_handlers: std::collections::HashMap::new(),
+            shell_pgid: std::process::id() as i32,
+            foreground_pgid: None,
+            last_background_pid: 0,
+            last_shell_options: "i".into(),
         }
     }
 }
@@ -137,6 +154,7 @@ impl Executor {
             Statement::While(while_stmt) => Self::execute_while(while_stmt, ctx),
             Statement::Until(until_stmt) => Self::execute_until(until_stmt, ctx),
             Statement::For(for_stmt) => Self::execute_for(for_stmt, ctx),
+            Statement::Select(select_stmt) => Self::execute_select(select_stmt, ctx),
             Statement::Case(case_stmt) => Self::execute_case(case_stmt, ctx),
             Statement::FunctionDef(func_def) => Self::define_function(func_def, ctx),
             Statement::Return(value) => {
@@ -185,6 +203,7 @@ impl Executor {
                 let result = Self::eval_double_bracket(args, ctx)?;
                 Ok(ExecOutcome::Success(i32::from(!result)))
             }
+            Statement::Background(inner) => Self::execute_background(inner, ctx),
         }
     }
 
@@ -278,6 +297,80 @@ impl Executor {
             ctx.variables.insert(for_stmt.variable.clone(), val.clone());
 
             match Self::execute_body(&for_stmt.body, ctx)? {
+                ExecOutcome::Success(code) => last = code,
+                ExecOutcome::Exit(code) => {
+                    ctx.in_loop = was_in_loop;
+                    return Ok(ExecOutcome::Exit(code));
+                }
+                ExecOutcome::Break => break,
+                ExecOutcome::Continue => continue,
+            }
+        }
+
+        ctx.in_loop = was_in_loop;
+        Ok(ExecOutcome::Success(last))
+    }
+
+    fn execute_select(
+        select_stmt: &SelectStmt,
+        ctx: &mut ExecContext,
+    ) -> Result<ExecOutcome, ShellError> {
+        let was_in_loop = ctx.in_loop;
+        ctx.in_loop = true;
+        let mut last = 0;
+
+        let mut all_words = Vec::new();
+        for word in &select_stmt.words {
+            let expanded = Self::expand_variables(word, ctx);
+            let braced = expand_braces(&[expanded]);
+            all_words.extend(braced);
+        }
+
+        let prompt = "#? ";
+
+        loop {
+            // Print menu
+            for (i, word) in all_words.iter().enumerate() {
+                println!(" {}) {word}", i + 1);
+            }
+
+            // Print prompt
+            print!("{prompt}");
+            let _ = std::io::stdout().flush();
+
+            // Read user input
+            let mut input = String::new();
+            match std::io::stdin().read_line(&mut input) {
+                Ok(0) => break, // EOF
+                Ok(_) => {}
+                Err(_) => break,
+            }
+
+            let input = input.trim();
+
+            // Empty input — redisplay menu
+            if input.is_empty() {
+                continue;
+            }
+
+            // Check if input is a number
+            if let Ok(idx) = input.parse::<usize>() {
+                if idx >= 1 && idx <= all_words.len() {
+                    ctx.variables.insert(
+                        select_stmt.variable.clone(),
+                        all_words[idx - 1].clone(),
+                    );
+                } else {
+                    ctx.variables
+                        .insert(select_stmt.variable.clone(), String::new());
+                }
+            } else {
+                // Not a number — treat as the value itself
+                ctx.variables
+                    .insert(select_stmt.variable.clone(), input.to_string());
+            }
+
+            match Self::execute_body(&select_stmt.body, ctx)? {
                 ExecOutcome::Success(code) => last = code,
                 ExecOutcome::Exit(code) => {
                     ctx.in_loop = was_in_loop;
@@ -507,6 +600,14 @@ impl Executor {
                     '#' => {
                         i += 1;
                         result.push_str(&ctx.positional_args.len().to_string());
+                    }
+                    '!' => {
+                        i += 1;
+                        result.push_str(&ctx.last_background_pid.to_string());
+                    }
+                    '-' => {
+                        i += 1;
+                        result.push_str(&ctx.last_shell_options);
                     }
                     c if c.is_ascii_digit() && c != '0' => {
                         let idx = c.to_digit(10).unwrap() as usize;
@@ -755,6 +856,10 @@ impl Executor {
             .map(|a| Self::expand_variables(a, ctx))
             .map(|a| expand_tilde(&a))
             .collect();
+        let expanded_args: Vec<String> = expanded_args
+            .iter()
+            .map(|a| Self::expand_process_substitution(a, ctx))
+            .collect();
         let expanded_args = aster_shell_core::glob::expand(&expanded_args);
 
         SimpleCommand {
@@ -763,6 +868,95 @@ impl Executor {
             redirects: cmd.redirects.clone(),
             span: cmd.span,
         }
+    }
+
+    /// Expands process substitution `<(...)` and `>(...)` in a single argument.
+    #[allow(unsafe_code)]
+    fn expand_process_substitution(arg: &str, _ctx: &mut ExecContext) -> String {
+        let mut result = String::with_capacity(arg.len());
+        let mut chars = arg.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '<' && chars.peek() == Some(&'(') {
+                chars.next(); // consume '('
+                // Collect until matching ')'
+                let mut depth = 1;
+                let mut inner = String::new();
+                while let Some(cc) = chars.next() {
+                    if cc == '(' {
+                        depth += 1;
+                        inner.push(cc);
+                    } else if cc == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        inner.push(cc);
+                    } else {
+                        inner.push(cc);
+                    }
+                }
+                // Create a pipe, run the command, feed stdout to the pipe
+                if let Ok((read_fd, write_fd)) = pipe() {
+                    // Spawn command writing to pipe
+                    let inner_cmd = inner.clone();
+                    let _ = std::thread::spawn(move || {
+                        unsafe {
+                            libc::dup2(write_fd, libc::STDOUT_FILENO);
+                            libc::close(write_fd);
+                        }
+                        let _ = std::process::Command::new("/bin/sh")
+                            .arg("-c")
+                            .arg(&inner_cmd)
+                            .status();
+                        unsafe { libc::close(libc::STDOUT_FILENO); }
+                    });
+                    unsafe { libc::close(write_fd); }
+                    result.push_str(&format!("/proc/self/fd/{read_fd}"));
+                } else {
+                    result.push_str(&format!("<({inner})"));
+                }
+            } else if c == '>' && chars.peek() == Some(&'(') {
+                chars.next(); // consume '('
+                let mut depth = 1;
+                let mut inner = String::new();
+                while let Some(cc) = chars.next() {
+                    if cc == '(' {
+                        depth += 1;
+                        inner.push(cc);
+                    } else if cc == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        inner.push(cc);
+                    } else {
+                        inner.push(cc);
+                    }
+                }
+                if let Ok((read_fd, write_fd)) = pipe() {
+                    let inner_cmd = inner.clone();
+                    let _ = std::thread::spawn(move || {
+                        unsafe {
+                            libc::dup2(read_fd, libc::STDIN_FILENO);
+                            libc::close(read_fd);
+                        }
+                        let _ = std::process::Command::new("/bin/sh")
+                            .arg("-c")
+                            .arg(&inner_cmd)
+                            .status();
+                        unsafe { libc::close(libc::STDIN_FILENO); }
+                    });
+                    unsafe { libc::close(read_fd); }
+                    result.push_str(&format!("/proc/self/fd/{write_fd}"));
+                } else {
+                    result.push_str(&format!(">({inner})"));
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
     }
 
     /// Executes a command string and captures its stdout. Used for `$(cmd)`.
@@ -838,6 +1032,58 @@ impl Executor {
         Ok((command, heredocs))
     }
 
+    fn execute_background(inner: &Statement, ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
+        // Execute the inner statement in the background
+        // For simple commands, spawn as a background job
+        match inner {
+            Statement::Pipe(pipe) if pipe.atoms.len() == 1 => {
+                if let Atom::Command(cmd) = &pipe.atoms[0] {
+                    let expanded = Self::expand_cmd(cmd, ctx);
+                    let (mut command, _heredocs) = Self::build_command(&expanded)?;
+
+                    // Create a new process group for the child
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        command.pre_exec(|| {
+                            libc::setpgid(0, 0);
+                            Ok(())
+                        });
+                    }
+
+                    let mut child = command.spawn().map_err(|e| ExecError::SpawnFailed {
+                        command: expanded.name.clone(),
+                        reason: e.to_string(),
+                    })?;
+
+                    let pid = child.id();
+
+                    // Create job entry
+                    let job_id = ctx.jobs.next_id();
+                    let processes = vec![aster_shell_core::jobs::ProcessInfo::new(pid, &expanded.name)];
+                    let job = aster_shell_core::jobs::Job::new(job_id, processes, format!("{} {}", expanded.name, expanded.args.join(" ")), true);
+                    ctx.jobs.add(job);
+
+                    ctx.last_background_pid = pid;
+                    println!("[{job_id}] {pid}");
+
+                    // Don't wait — let it run in background
+                    // Detach stdout/stderr so they don't block
+                    let _ = child.stdout.take();
+                    let _ = child.stderr.take();
+
+                    return Ok(ExecOutcome::Success(0));
+                }
+            }
+            _ => {
+                // For complex background commands, run in a subshell-like fashion
+                // Just execute it and print status
+                let outcome = Self::execute_statement(inner, ctx)?;
+                return Ok(outcome);
+            }
+        }
+        Ok(ExecOutcome::Success(0))
+    }
+
     fn execute_pipe(pipe: &PipeExpr, ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
         if pipe.atoms.len() == 1 {
             return Self::execute_atom(&pipe.atoms[0], ctx);
@@ -846,6 +1092,7 @@ impl Executor {
         let mut children: Vec<Child> = Vec::new();
         let mut prev_stdout: Option<std::process::ChildStdout> = None;
         let mut last_exit = 0;
+        let mut first_pid: Option<u32> = None;
 
         for (i, atom) in pipe.atoms.iter().enumerate() {
             match atom {
@@ -864,10 +1111,27 @@ impl Executor {
                         command.stdout(Stdio::piped());
                     }
 
+                    // Put child in its own process group (first child is the group leader)
+                    let pgid_val = first_pid;
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        command.pre_exec(move || {
+                            match pgid_val {
+                                Some(leader) => libc::setpgid(0, leader as i32),
+                                None => libc::setpgid(0, 0),
+                            };
+                            Ok(())
+                        });
+                    }
+
                     let mut child = command.spawn().map_err(|e| ExecError::SpawnFailed {
                         command: expanded.name.clone(),
                         reason: e.to_string(),
                     })?;
+
+                    if first_pid.is_none() {
+                        first_pid = Some(child.id());
+                    }
 
                     if !has_prev_stdout && !heredocs.is_empty() {
                         if let Some(mut stdin) = child.stdin.take() {
@@ -994,6 +1258,12 @@ impl Executor {
                     .first()
                     .and_then(|s| s.parse::<i32>().ok())
                     .unwrap_or(ctx.last_exit_code);
+                // Run EXIT trap handler if set
+                if let Some(action) = ctx.trap_handlers.get(&0).cloned() {
+                    if action != "-" && !action.is_empty() {
+                        let _ = Self::run_trap_action(&action, ctx);
+                    }
+                }
                 return Ok(ExecOutcome::Exit(code));
             }
             "history" => {
@@ -1015,7 +1285,7 @@ impl Executor {
                 })?;
                 return Self::execute(&program, ctx);
             }
-            "source" => {
+            "source" | "." => {
                 let path = expanded_cmd
                     .args
                     .first()
@@ -1045,13 +1315,54 @@ impl Executor {
                 let _ = std::io::stdout().flush();
                 return Ok(ExecOutcome::Success(0));
             }
+            "exec" => {
+                if expanded_cmd.args.is_empty() {
+                    // exec with no args: just return success (replaces shell with nothing)
+                    return Ok(ExecOutcome::Success(0));
+                }
+                // exec replaces the shell with the given command
+                let status = std::process::Command::new(&expanded_cmd.args[0])
+                    .args(&expanded_cmd.args[1..])
+                    .status()
+                    .map_err(|e| ExecError::SpawnFailed {
+                        command: expanded_cmd.args[0].clone(),
+                        reason: e.to_string(),
+                    })?;
+                let code = status.code().unwrap_or(1);
+                return Ok(ExecOutcome::Exit(code));
+            }
+            "trap" => {
+                return Self::builtin_trap(&expanded_cmd.args, ctx);
+            }
+            "wait" => {
+                return Self::builtin_wait(&expanded_cmd.args, ctx);
+            }
+            "disown" => {
+                // disown: remove jobs from job table
+                if expanded_cmd.args.is_empty() {
+                    // disown all background jobs
+                    ctx.jobs.cleanup();
+                } else {
+                    for arg in &expanded_cmd.args {
+                        let id = arg.trim_start_matches('%').parse::<u32>().unwrap_or(0);
+                        ctx.jobs.remove(id);
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
             "jobs" => {
                 let jobs_list = ctx.jobs.list();
                 if jobs_list.is_empty() {
                     // nothing to show
                 } else {
                     for job in &jobs_list {
-                        println!("{}", job.status_line());
+                        let state_str = match job.state() {
+                            aster_shell_core::jobs::JobState::Running => "Running",
+                            aster_shell_core::jobs::JobState::Stopped => "Stopped",
+                            aster_shell_core::jobs::JobState::Completed => "Done",
+                        };
+                        let bg_marker = if job.background { " &" } else { "" };
+                        println!("[{}] {}+ {}{}", job.id, job.pgid().unwrap_or(0), state_str, bg_marker);
                     }
                 }
                 return Ok(ExecOutcome::Success(0));
@@ -1060,7 +1371,41 @@ impl Executor {
                 let id_str = expanded_cmd.args.first().map(String::as_str).unwrap_or("%1");
                 let id = id_str.trim_start_matches('%').parse::<u32>().unwrap_or(1);
                 if let Some(job) = ctx.jobs.get(id) {
+                    let pgid = job.pgid().unwrap_or(0) as i32;
                     println!("{}", job.command_string);
+                    // Bring process group to foreground
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        libc::tcsetpgrp(libc::STDIN_FILENO, pgid);
+                    }
+                    // Resume if stopped
+                    if job.state() == aster_shell_core::jobs::JobState::Stopped {
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            libc::kill(-pgid, libc::SIGCONT);
+                        }
+                        job.set_state(aster_shell_core::jobs::JobState::Running);
+                    }
+                    // Wait for the process group
+                    let mut status: i32 = 0;
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        libc::waitpid(pgid, &mut status, libc::WUNTRACED);
+                    }
+                    // Restore terminal to shell
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        libc::tcsetpgrp(libc::STDIN_FILENO, ctx.shell_pgid);
+                    }
+                    if libc::WIFEXITED(status) {
+                        let code = libc::WEXITSTATUS(status);
+                        ctx.last_exit_code = code;
+                        job.set_state(aster_shell_core::jobs::JobState::Completed);
+                        return Ok(ExecOutcome::Success(code));
+                    } else if libc::WIFSTOPPED(status) {
+                        job.set_state(aster_shell_core::jobs::JobState::Stopped);
+                        return Ok(ExecOutcome::Success(0));
+                    }
                     job.set_state(aster_shell_core::jobs::JobState::Completed);
                 } else {
                     eprintln!("fg: job {id} not found");
@@ -1072,7 +1417,13 @@ impl Executor {
                 let id_str = expanded_cmd.args.first().map(String::as_str).unwrap_or("%1");
                 let id = id_str.trim_start_matches('%').parse::<u32>().unwrap_or(1);
                 if let Some(job) = ctx.jobs.get(id) {
-                    println!("[{}] {}", id, job.command_string);
+                    let pgid = job.pgid().unwrap_or(0) as i32;
+                    println!("[{}] {} &", id, job.command_string);
+                    // Resume the stopped process group in background
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        libc::kill(-pgid, libc::SIGCONT);
+                    }
                     job.set_state(aster_shell_core::jobs::JobState::Running);
                 } else {
                     eprintln!("bg: job {id} not found");
@@ -1104,6 +1455,44 @@ impl Executor {
                 }
                 eprintln!("kill: invalid pid '{pid_str}'");
                 return Ok(ExecOutcome::Success(1));
+            }
+            "set" => {
+                // set: display variables; set -e/-u/-x etc (mostly no-ops for compat)
+                if expanded_cmd.args.is_empty() {
+                    let mut vars: Vec<_> = ctx.variables.iter().collect();
+                    vars.sort_by(|a, b| a.0.cmp(b.0));
+                    for (name, value) in vars {
+                        println!("{name}={value}");
+                    }
+                    return Ok(ExecOutcome::Success(0));
+                }
+                // set -- sets positional args
+                if expanded_cmd.args.first().map(String::as_str) == Some("--") {
+                    ctx.positional_args = expanded_cmd.args[1..].to_vec();
+                    return Ok(ExecOutcome::Success(0));
+                }
+                // set -e/-u/-x etc — silently accept for compat
+                if expanded_cmd.args[0].starts_with('-') {
+                    return Ok(ExecOutcome::Success(0));
+                }
+                // set VAR=value — set variables
+                for arg in &expanded_cmd.args {
+                    if let Some((name, value)) = arg.split_once('=') {
+                        let expanded_value = Self::expand_variables(value, ctx);
+                        ctx.variables.insert(name.to_string(), expanded_value);
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            "read" => {
+                let var_name = expanded_cmd.args.first().map(String::as_str).unwrap_or("REPLY");
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                let input = input.trim_end_matches('\n').trim_end_matches('\r').to_string();
+
+                // Handle -p (prompt), -r (raw), -s (silent) — simplified
+                ctx.variables.insert(var_name.to_string(), input);
+                return Ok(ExecOutcome::Success(0));
             }
             _ => {}
         }
@@ -1280,6 +1669,134 @@ impl Executor {
         Self::execute(&group.body, ctx)
     }
 
+    fn builtin_trap(args: &[String], ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
+        fn parse_signal(name: &str) -> Option<i32> {
+            match name {
+                "SIGHUP" | "HUP" | "1" => Some(1),
+                "SIGINT" | "INT" | "2" => Some(2),
+                "SIGQUIT" | "QUIT" | "3" => Some(3),
+                "SIGTERM" | "TERM" | "15" => Some(15),
+                "SIGUSR1" | "USR1" | "10" => Some(10),
+                "SIGUSR2" | "USR2" | "12" => Some(12),
+                "SIGCHLD" | "CHLD" | "17" => Some(17),
+                "SIGSTOP" | "STOP" | "19" => Some(19),
+                "SIGCONT" | "CONT" | "18" => Some(18),
+                "SIGPIPE" | "PIPE" | "13" => Some(13),
+                "SIGALRM" | "ALRM" | "14" => Some(14),
+                "SIGTSTP" | "TSTP" | "20" => Some(20),
+                "SIGTTIN" | "TTIN" | "21" => Some(21),
+                "SIGTTOU" | "TTOU" | "22" => Some(22),
+                "SIGWINCH" | "WINCH" | "28" => Some(28),
+                "EXIT" | "0" => Some(0),
+                _ => None,
+            }
+        }
+
+        match args.len() {
+            0 => {
+                let mut handlers: Vec<_> = ctx.trap_handlers.iter().collect();
+                handlers.sort_by_key(|(k, _)| *k);
+                for (sig, cmd) in handlers {
+                    let name = match sig {
+                        0 => "EXIT", 1 => "SIGHUP", 2 => "SIGINT", 3 => "SIGQUIT",
+                        10 => "SIGUSR1", 12 => "SIGUSR2", 13 => "SIGPIPE", 14 => "SIGALRM",
+                        15 => "SIGTERM", 17 => "SIGCHLD", 18 => "SIGCONT", 19 => "SIGSTOP",
+                        20 => "SIGTSTP", 21 => "SIGTTIN", 22 => "SIGTTOU", 28 => "SIGWINCH",
+                        _ => "UNKNOWN",
+                    };
+                    println!("trap -- '{cmd}' {name}");
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            1 => {
+                if args[0] == "-" {
+                    ctx.trap_handlers.clear();
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            _ => {
+                let action = &args[0];
+                for sig_name in &args[1..] {
+                    if let Some(sig) = parse_signal(sig_name) {
+                        if action == "-" {
+                            ctx.trap_handlers.remove(&sig);
+                        } else {
+                            ctx.trap_handlers.insert(sig, action.clone());
+                        }
+                    } else {
+                        eprintln!("trap: unknown signal '{sig_name}'");
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+        }
+    }
+
+    /// Runs a trap action string (as a command).
+    fn run_trap_action(action: &str, ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
+        let tokens = Lexer::new(action).tokenize().map_err(|e| {
+            ShellError::Exec(ExecError::SpawnFailed {
+                command: "trap".into(),
+                reason: e.to_string(),
+            })
+        })?;
+        let program = Parser::new(&tokens).parse().map_err(|e| {
+            ShellError::Exec(ExecError::SpawnFailed {
+                command: "trap".into(),
+                reason: e.to_string(),
+            })
+        })?;
+        Self::execute(&program, ctx)
+    }
+
+    fn builtin_wait(args: &[String], ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
+        if args.is_empty() {
+            // wait: wait for all background jobs
+            let jobs: Vec<u32> = ctx.jobs.list().iter().map(|j| j.id).collect();
+            for id in jobs {
+                if let Some(job) = ctx.jobs.get(id) {
+                    if let Some(pgid) = job.pgid() {
+                        let mut status: i32 = 0;
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            libc::waitpid(pgid as i32, &mut status, libc::WUNTRACED);
+                        }
+                        if libc::WIFEXITED(status) {
+                            job.set_state(aster_shell_core::jobs::JobState::Completed);
+                        } else if libc::WIFSTOPPED(status) {
+                            job.set_state(aster_shell_core::jobs::JobState::Stopped);
+                        }
+                    }
+                }
+            }
+            ctx.jobs.cleanup();
+            return Ok(ExecOutcome::Success(ctx.last_exit_code));
+        }
+
+        // wait %N — wait for specific job
+        let mut last_code = 0;
+        for arg in args {
+            let id = arg.trim_start_matches('%').parse::<u32>().unwrap_or(0);
+            if let Some(job) = ctx.jobs.get(id) {
+                if let Some(pgid) = job.pgid() {
+                    let mut status: i32 = 0;
+                    #[allow(unsafe_code)]
+                    unsafe {
+                        libc::waitpid(pgid as i32, &mut status, libc::WUNTRACED);
+                    }
+                    if libc::WIFEXITED(status) {
+                        last_code = libc::WEXITSTATUS(status);
+                        job.set_state(aster_shell_core::jobs::JobState::Completed);
+                    } else if libc::WIFSTOPPED(status) {
+                        job.set_state(aster_shell_core::jobs::JobState::Stopped);
+                    }
+                }
+            }
+        }
+        ctx.last_exit_code = last_code;
+        Ok(ExecOutcome::Success(last_code))
+    }
+
     fn builtin_cd(args: &[String], ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
         let target = if args.is_empty() {
             dirs::home_dir().ok_or_else(|| ExecError::CdError("HOME not set".into()))?
@@ -1426,6 +1943,18 @@ impl Executor {
             }
         }
         Ok(heredocs)
+    }
+}
+
+/// Creates a pipe and returns `(read_fd, write_fd)`.
+#[allow(unsafe_code)]
+fn pipe() -> Result<(i32, i32), std::io::Error> {
+    let mut fds = [0i32; 2];
+    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if ret == 0 {
+        Ok((fds[0], fds[1]))
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 

@@ -26,6 +26,8 @@ pub enum Statement {
     Until(UntilStmt),
     /// For loop over words.
     For(ForStmt),
+    /// Select/menu loop.
+    Select(SelectStmt),
     /// Case/switch statement.
     Case(CaseStmt),
     /// Function definition.
@@ -42,6 +44,8 @@ pub enum Statement {
     Assign(AssignStmt),
     /// Double-bracket test `[[ ... ]]`.
     DoubleBracket(Vec<String>, Span),
+    /// Background command: `cmd &`.
+    Background(Box<Self>),
 }
 
 impl Statement {
@@ -55,6 +59,7 @@ impl Statement {
             Self::While(s) => s.span,
             Self::Until(s) => s.span,
             Self::For(s) => s.span,
+            Self::Select(s) => s.span,
             Self::Case(s) => s.span,
             Self::FunctionDef(s) => s.span,
             Self::Return(_) => Span::dummy(),
@@ -62,6 +67,7 @@ impl Statement {
             Self::Compound(_, s) => *s,
             Self::Assign(s) => s.span,
             Self::DoubleBracket(_, s) => *s,
+            Self::Background(s) => s.span(),
         }
     }
 }
@@ -109,6 +115,19 @@ pub struct ForStmt {
     /// The loop variable name.
     pub variable: String,
     /// The words to iterate over.
+    pub words: Vec<String>,
+    /// The loop body.
+    pub body: Vec<Statement>,
+    /// Source location.
+    pub span: Span,
+}
+
+/// A `select` menu loop.
+#[derive(Debug, Clone)]
+pub struct SelectStmt {
+    /// The variable that receives the user's selection.
+    pub variable: String,
+    /// The words to display in the menu.
     pub words: Vec<String>,
     /// The loop body.
     pub body: Vec<Statement>,

@@ -442,7 +442,6 @@ fn dirs_cmd() -> Result<i32, ExecError> {
 }
 
 fn wait_cmd() -> Result<i32, ExecError> {
-    // Simplified wait - just return 0
     Ok(0)
 }
 

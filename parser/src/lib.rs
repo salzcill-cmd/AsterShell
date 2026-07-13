@@ -14,7 +14,7 @@
 
 use aster_shell_core::{
     AssignStmt, Atom, CaseArm, CaseStmt, ForStmt, FunctionDef, Group, IfStmt, PipeExpr, Redirect,
-    RedirectKind, Statement, UntilStmt, WhileStmt,
+    RedirectKind, SelectStmt, Statement, UntilStmt, WhileStmt,
 };
 use aster_shell_core::{ParseError, Program, ShellError, SimpleCommand, Span};
 
@@ -31,6 +31,7 @@ const UNTIL_WORDS: &[&str] = &["until"];
 const DO_WORDS: &[&str] = &["do"];
 const DONE_WORDS: &[&str] = &["done"];
 const FOR_WORDS: &[&str] = &["for"];
+const SELECT_WORDS: &[&str] = &["select"];
 const IN_WORDS: &[&str] = &["in"];
 const CASE_WORDS: &[&str] = &["case"];
 const ESAC_WORDS: &[&str] = &["esac"];
@@ -62,24 +63,44 @@ impl<'a> Parser<'a> {
 
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let start = self.current_span();
-        let mut statements = vec![self.parse_statement()?];
+        let mut stmts = vec![self.parse_statement()?];
 
-        while self.peek_is(&TokenKind::Semicolon) {
-            self.advance();
+        loop {
             self.skip_comments();
-            if self.at_end() || self.peek_is(&TokenKind::Eof) {
+            if self.peek_is(&TokenKind::Semicolon) {
+                self.advance();
+                self.skip_comments();
+                if self.at_end() || self.peek_is(&TokenKind::Eof) {
+                    break;
+                }
+                stmts.push(self.parse_statement()?);
+            } else if self.peek_is(&TokenKind::Amp) {
+                self.advance();
+                // `cmd &` — mark last statement as background
+                if let Some(last) = stmts.pop() {
+                    stmts.push(Statement::Background(Box::new(last)));
+                }
+                self.skip_comments();
+                if self.peek_is(&TokenKind::Semicolon) {
+                    self.advance();
+                    self.skip_comments();
+                }
+                if self.at_end() || self.peek_is(&TokenKind::Eof) {
+                    break;
+                }
+                stmts.push(self.parse_statement()?);
+            } else {
                 break;
             }
-            statements.push(self.parse_statement()?);
         }
 
-        let span = if let Some(last) = statements.last() {
+        let span = if let Some(last) = stmts.last() {
             Span::merge(start, last.span())
         } else {
             start
         };
 
-        Ok(Program { statements, span })
+        Ok(Program { statements: stmts, span })
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
@@ -92,6 +113,7 @@ impl<'a> Parser<'a> {
                 "while" => return self.parse_while(),
                 "until" => return self.parse_until(),
                 "for" => return self.parse_for(),
+                "select" => return self.parse_select(),
                 "case" => return self.parse_case(),
                 "function" => return self.parse_function_def(),
                 "return" => return self.parse_return(),
@@ -279,6 +301,44 @@ impl<'a> Parser<'a> {
 
         let span = Span::merge(start, self.prev_span());
         Ok(Statement::For(ForStmt {
+            variable,
+            words,
+            body,
+            span,
+        }))
+    }
+
+    fn parse_select(&mut self) -> Result<Statement, ParseError> {
+        let start = self.current_span();
+        self.expect_keyword(SELECT_WORDS)?;
+        let variable = self.expect_word_value()?;
+
+        let words = if self.peek_keyword_is(IN_WORDS) {
+            self.advance();
+            let mut words = Vec::new();
+            loop {
+                self.skip_comments();
+                if self.at_end()
+                    || self.peek_is(&TokenKind::Eof)
+                    || self.peek_keyword_is(DO_WORDS)
+                    || self.peek_is(&TokenKind::Semicolon)
+                {
+                    break;
+                }
+                words.push(self.expect_word_value()?);
+            }
+            words
+        } else {
+            Vec::new()
+        };
+
+        self.skip_optional_semicolon();
+        self.expect_keyword(DO_WORDS)?;
+        let body = self.parse_until_done(&["done"])?;
+        self.expect_keyword(DONE_WORDS)?;
+
+        let span = Span::merge(start, self.prev_span());
+        Ok(Statement::Select(SelectStmt {
             variable,
             words,
             body,
