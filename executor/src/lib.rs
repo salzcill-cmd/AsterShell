@@ -8,7 +8,7 @@ use aster_lexer::Lexer;
 use aster_parser::Parser;
 use aster_shell_core::{
     AliasMap, Atom, CaseStmt, ExecError, ForStmt, FunctionDef, Group, IfStmt, PipeExpr, Program,
-    Redirect, RedirectKind, ShellError, SimpleCommand, Statement, WhileStmt,
+    Redirect, RedirectKind, ShellError, SimpleCommand, Statement, UntilStmt, WhileStmt,
 };
 use std::env;
 use std::io::Write;
@@ -126,6 +126,7 @@ impl Executor {
             }
             Statement::If(if_stmt) => Self::execute_if(if_stmt, ctx),
             Statement::While(while_stmt) => Self::execute_while(while_stmt, ctx),
+            Statement::Until(until_stmt) => Self::execute_until(until_stmt, ctx),
             Statement::For(for_stmt) => Self::execute_for(for_stmt, ctx),
             Statement::Case(case_stmt) => Self::execute_case(case_stmt, ctx),
             Statement::FunctionDef(func_def) => Self::define_function(func_def, ctx),
@@ -206,6 +207,34 @@ impl Executor {
             }
 
             match Self::execute_body(&while_stmt.body, ctx)? {
+                ExecOutcome::Success(code) => last = code,
+                ExecOutcome::Exit(code) => {
+                    ctx.in_loop = was_in_loop;
+                    return Ok(ExecOutcome::Exit(code));
+                }
+                ExecOutcome::Break => break,
+                ExecOutcome::Continue => continue,
+            }
+        }
+
+        ctx.in_loop = was_in_loop;
+        Ok(ExecOutcome::Success(last))
+    }
+
+    fn execute_until(
+        until_stmt: &UntilStmt,
+        ctx: &mut ExecContext,
+    ) -> Result<ExecOutcome, ShellError> {
+        let was_in_loop = ctx.in_loop;
+        ctx.in_loop = true;
+        let mut last = 0;
+
+        loop {
+            if Self::eval_condition(&until_stmt.condition, ctx)? {
+                break;
+            }
+
+            match Self::execute_body(&until_stmt.body, ctx)? {
                 ExecOutcome::Success(code) => last = code,
                 ExecOutcome::Exit(code) => {
                     ctx.in_loop = was_in_loop;
@@ -907,6 +936,92 @@ impl Executor {
             return Ok(ExecOutcome::Success(0));
         }
 
+        // Handle export VAR=value directly (syncs with ctx.variables)
+        if expanded_cmd.name == "export" {
+            if expanded_cmd.args.is_empty() {
+                // export without args: export all ctx.variables
+                let mut vars: Vec<_> = ctx.variables.iter().collect();
+                vars.sort_by(|a, b| a.0.cmp(b.0));
+                for (name, value) in vars {
+                    #[allow(unsafe_code)]
+                    unsafe { std::env::set_var(name.as_str(), value.as_str()); }
+                    println!("declare -x {name}=\"{value}\"");
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            for arg in &expanded_cmd.args {
+                if let Some((name, value)) = arg.split_once('=') {
+                    let expanded_value = Self::expand_variables(value, ctx);
+                    ctx.variables.insert(name.to_string(), expanded_value.clone());
+                    #[allow(unsafe_code)]
+                    unsafe { std::env::set_var(name, expanded_value.as_str()); }
+                } else if let Some(value) = ctx.variables.get(arg).cloned() {
+                    #[allow(unsafe_code)]
+                    unsafe { std::env::set_var(arg.as_str(), value.as_str()); }
+                } else if let Ok(value) = std::env::var(arg) {
+                    ctx.variables.insert(arg.clone(), value);
+                }
+            }
+            return Ok(ExecOutcome::Success(0));
+        }
+
+        // Handle declare/local/readonly
+        if expanded_cmd.name == "declare" || expanded_cmd.name == "typeset" {
+            for arg in &expanded_cmd.args {
+                if let Some((name, value)) = arg.split_once('=') {
+                    let expanded_value = Self::expand_variables(value, ctx);
+                    ctx.variables.insert(name.to_string(), expanded_value);
+                } else {
+                    // declare VAR (no value): just export
+                    if let Ok(value) = std::env::var(arg) {
+                        ctx.variables.insert(arg.clone(), value);
+                    }
+                }
+            }
+            return Ok(ExecOutcome::Success(0));
+        }
+        if expanded_cmd.name == "local" {
+            // In a function, set in ctx.variables
+            for arg in &expanded_cmd.args {
+                if let Some((name, value)) = arg.split_once('=') {
+                    let expanded_value = Self::expand_variables(value, ctx);
+                    ctx.variables.insert(name.to_string(), expanded_value);
+                }
+            }
+            return Ok(ExecOutcome::Success(0));
+        }
+        if expanded_cmd.name == "readonly" {
+            for arg in &expanded_cmd.args {
+                if let Some((name, value)) = arg.split_once('=') {
+                    let expanded_value = Self::expand_variables(value, ctx);
+                    ctx.variables.insert(name.to_string(), expanded_value.clone());
+                    #[allow(unsafe_code)]
+                    unsafe { std::env::set_var(name, expanded_value.as_str()); }
+                }
+            }
+            return Ok(ExecOutcome::Success(0));
+        }
+
+        // Handle unset directly
+        if expanded_cmd.name == "unset" {
+            for arg in &expanded_cmd.args {
+                ctx.variables.remove(arg);
+                #[allow(unsafe_code)]
+                unsafe { std::env::remove_var(arg.as_str()); }
+            }
+            return Ok(ExecOutcome::Success(0));
+        }
+
+        // Handle env directly
+        if expanded_cmd.name == "env" {
+            let mut vars: Vec<_> = ctx.variables.iter().collect();
+            vars.sort_by(|a, b| a.0.cmp(b.0));
+            for (name, value) in vars {
+                println!("{name}={value}");
+            }
+            return Ok(ExecOutcome::Success(0));
+        }
+
         // Check for function invocation
         if let Some(body) = ctx.functions.get(&expanded_cmd.name).cloned() {
             let was_in_function = ctx.in_function;
@@ -1067,7 +1182,10 @@ impl Executor {
                             target: redirect.target.clone(),
                             reason: e.to_string(),
                         })?;
-                    command.stdout(file);
+                    match redirect.fd {
+                        Some(2) => { command.stderr(file); }
+                        _ => { command.stdout(file); }
+                    }
                 }
                 RedirectKind::Append => {
                     let file = OpenOptions::new()
@@ -1078,15 +1196,30 @@ impl Executor {
                             target: redirect.target.clone(),
                             reason: e.to_string(),
                         })?;
-                    command.stdout(file);
+                    match redirect.fd {
+                        Some(2) => { command.stderr(file); }
+                        _ => { command.stdout(file); }
+                    }
                 }
                 RedirectKind::FdOutput => {
-                    let file =
-                        File::create(&redirect.target).map_err(|e| ExecError::RedirectFailed {
-                            target: redirect.target.clone(),
-                            reason: e.to_string(),
-                        })?;
-                    command.stdout(file);
+                    let target_str = redirect.target.trim();
+                    // Handle 2>&1 (dup stderr to stdout) and 1>&2 (dup stdout to stderr)
+                    if target_str == "1" && redirect.fd == Some(2) {
+                        command.stderr(std::process::Stdio::inherit());
+                    } else if target_str == "2" && redirect.fd == Some(1) {
+                        command.stdout(std::process::Stdio::piped()); // simplified
+                    } else {
+                        let file =
+                            File::create(&redirect.target).map_err(|e| ExecError::RedirectFailed {
+                                target: redirect.target.clone(),
+                                reason: e.to_string(),
+                            })?;
+                        match redirect.fd {
+                            Some(2) => { command.stderr(file); }
+                            Some(1) | None => { command.stdout(file); }
+                            _ => { command.stdout(file); }
+                        }
+                    }
                 }
                 RedirectKind::FdAppend => {
                     let file = OpenOptions::new()
@@ -1097,7 +1230,10 @@ impl Executor {
                             target: redirect.target.clone(),
                             reason: e.to_string(),
                         })?;
-                    command.stdout(file);
+                    match redirect.fd {
+                        Some(2) => { command.stderr(file); }
+                        _ => { command.stdout(file); }
+                    }
                 }
                 RedirectKind::HereDoc | RedirectKind::HereString => {
                     if let Some(body) = &redirect.body {
@@ -1105,8 +1241,7 @@ impl Executor {
                     }
                 }
                 _ => {
-                    // Other redirect kinds (FdInput, FdDup, FdClose)
-                    // are not yet fully implemented for external commands.
+                    // FdInput, FdDup, FdClose — not yet fully implemented
                 }
             }
         }

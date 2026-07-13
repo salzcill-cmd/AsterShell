@@ -22,6 +22,8 @@ pub enum Statement {
     If(IfStmt),
     /// While loop.
     While(WhileStmt),
+    /// Until loop (runs while condition is false).
+    Until(UntilStmt),
     /// For loop over words.
     For(ForStmt),
     /// Case/switch statement.
@@ -49,6 +51,7 @@ impl Statement {
             Self::And(l, r) | Self::Or(l, r) => Span::merge(l.span(), r.span()),
             Self::If(s) => s.span,
             Self::While(s) => s.span,
+            Self::Until(s) => s.span,
             Self::For(s) => s.span,
             Self::Case(s) => s.span,
             Self::FunctionDef(s) => s.span,
@@ -78,6 +81,17 @@ pub struct IfStmt {
 /// A `while` loop statement.
 #[derive(Debug, Clone)]
 pub struct WhileStmt {
+    /// The loop condition.
+    pub condition: Box<Statement>,
+    /// The loop body.
+    pub body: Vec<Statement>,
+    /// Source location.
+    pub span: Span,
+}
+
+/// An `until` loop statement (runs while condition is false).
+#[derive(Debug, Clone)]
+pub struct UntilStmt {
     /// The loop condition.
     pub condition: Box<Statement>,
     /// The loop body.

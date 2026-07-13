@@ -161,12 +161,79 @@ fn printf(args: &[String]) -> Result<i32, ExecError> {
         return Ok(0);
     }
     let format = &args[0];
-    let mut result = format.clone();
-    for (i, arg) in args.iter().skip(1).enumerate() {
-        let placeholder = format!("{{{i}}}");
-        result = result.replace(&placeholder, arg);
+    let mut result = String::new();
+    let mut arg_idx = 1;
+    let mut chars = format.chars().peekable();
+    let mut print_newline = true;
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            match chars.peek() {
+                Some('s') => {
+                    chars.next();
+                    let arg = args.get(arg_idx).map(String::as_str).unwrap_or("");
+                    result.push_str(arg);
+                    arg_idx += 1;
+                }
+                Some('d') | Some('i') => {
+                    chars.next();
+                    let arg = args.get(arg_idx).map(String::as_str).unwrap_or("0");
+                    result.push_str(arg);
+                    arg_idx += 1;
+                }
+                Some('f') => {
+                    chars.next();
+                    let arg = args.get(arg_idx).map(String::as_str).unwrap_or("0");
+                    result.push_str(arg);
+                    arg_idx += 1;
+                }
+                Some('c') => {
+                    chars.next();
+                    if let Some(arg) = args.get(arg_idx) {
+                        if let Some(ch) = arg.chars().next() {
+                            result.push(ch);
+                        }
+                    }
+                    arg_idx += 1;
+                }
+                Some('b') => {
+                    // %b: interpret escapes in argument
+                    chars.next();
+                    let arg = args.get(arg_idx).map(String::as_str).unwrap_or("");
+                    let expanded = arg
+                        .replace("\\n", "\n")
+                        .replace("\\t", "\t")
+                        .replace("\\\\", "\\");
+                    result.push_str(&expanded);
+                    arg_idx += 1;
+                }
+                Some('%') => {
+                    chars.next();
+                    result.push('%');
+                }
+                Some('n') => {
+                    chars.next();
+                    result.push('\n');
+                }
+                _ => {
+                    result.push(c);
+                }
+            }
+        } else {
+            result.push(c);
+        }
     }
-    println!("{result}");
+
+    // Check if format string ends with % (no newline after last format)
+    if !format.ends_with('%') {
+        // Standard printf behavior: no trailing newline
+        print!("{result}");
+    } else {
+        print!("{result}");
+        print_newline = false;
+    }
+
+    let _ = print_newline; // printf doesn't add newline by default
     Ok(0)
 }
 

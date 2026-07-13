@@ -14,7 +14,7 @@
 
 use aster_shell_core::{
     AssignStmt, Atom, CaseArm, CaseStmt, ForStmt, FunctionDef, Group, IfStmt, PipeExpr, Redirect,
-    RedirectKind, Statement, WhileStmt,
+    RedirectKind, Statement, UntilStmt, WhileStmt,
 };
 use aster_shell_core::{ParseError, Program, ShellError, SimpleCommand, Span};
 
@@ -27,6 +27,7 @@ const ELSE_WORDS: &[&str] = &["else"];
 const ELIF_WORDS: &[&str] = &["elif"];
 const FI_WORDS: &[&str] = &["fi"];
 const WHILE_WORDS: &[&str] = &["while"];
+const UNTIL_WORDS: &[&str] = &["until"];
 const DO_WORDS: &[&str] = &["do"];
 const DONE_WORDS: &[&str] = &["done"];
 const FOR_WORDS: &[&str] = &["for"];
@@ -89,6 +90,7 @@ impl<'a> Parser<'a> {
             match kw {
                 "if" => return self.parse_if(),
                 "while" => return self.parse_while(),
+                "until" => return self.parse_until(),
                 "for" => return self.parse_for(),
                 "case" => return self.parse_case(),
                 "function" => return self.parse_function_def(),
@@ -110,6 +112,11 @@ impl<'a> Parser<'a> {
         // Check for compound command { ... }
         if self.peek_is(&TokenKind::OpenBrace) {
             return self.parse_compound();
+        }
+
+        // Check for POSIX function definition: name() { ... } or name () { ... }
+        if let Some(func) = self.try_parse_posix_function_def()? {
+            return Ok(func);
         }
 
         // Check for assignment: WORD=VALUE (must not have spaces around =)
@@ -204,6 +211,23 @@ impl<'a> Parser<'a> {
 
         let span = Span::merge(start, self.prev_span());
         Ok(Statement::While(WhileStmt {
+            condition,
+            body,
+            span,
+        }))
+    }
+
+    fn parse_until(&mut self) -> Result<Statement, ParseError> {
+        let start = self.current_span();
+        self.expect_keyword(UNTIL_WORDS)?;
+        let condition = Box::new(self.parse_condition_statement()?);
+        self.skip_optional_semicolon();
+        self.expect_keyword(DO_WORDS)?;
+        let body = self.parse_until_done(&["done"])?;
+        self.expect_keyword(DONE_WORDS)?;
+
+        let span = Span::merge(start, self.prev_span());
+        Ok(Statement::Until(UntilStmt {
             condition,
             body,
             span,
@@ -505,6 +529,38 @@ impl<'a> Parser<'a> {
         Ok(None)
     }
 
+    /// Tries to parse a POSIX function definition: `name() { ... }` or `name () { ... }`.
+    fn try_parse_posix_function_def(&mut self) -> Result<Option<Statement>, ParseError> {
+        if self.pos + 1 >= self.tokens.len() {
+            return Ok(None);
+        }
+        if let TokenKind::Word(name) = &self.tokens[self.pos].kind {
+            if let TokenKind::LeftParen = &self.tokens[self.pos + 1].kind {
+                let start = self.tokens[self.pos].span;
+                self.pos += 2; // skip name (
+                // consume optional ) — some use `name()` without space
+                if self.pos < self.tokens.len() {
+                    if let TokenKind::RightParen = &self.tokens[self.pos].kind {
+                        self.pos += 1;
+                    }
+                }
+                self.skip_comments();
+                if self.peek_is(&TokenKind::OpenBrace) {
+                    self.advance();
+                    let body = self.parse_until_brace()?;
+                    self.expect(&TokenKind::CloseBrace)?;
+                    let span = Span::merge(start, self.prev_span());
+                    return Ok(Some(Statement::FunctionDef(FunctionDef {
+                        name: name.clone(),
+                        body,
+                        span,
+                    })));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn parse_pipe(&mut self) -> Result<PipeExpr, ParseError> {
         let start = self.current_span();
         let mut atoms = vec![self.parse_atom()?];
@@ -557,6 +613,27 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_comments();
             match self.peek() {
+                Some(TokenKind::Word(w)) if Self::is_fd_prefix(w) => {
+                    // Check if next token is a redirect: e.g. 2> or 2>>
+                    if self.pos + 1 < self.tokens.len() {
+                        let next = &self.tokens[self.pos + 1].kind;
+                        if matches!(
+                            next,
+                            TokenKind::GreaterThan
+                                | TokenKind::LessThan
+                                | TokenKind::GreaterGreater
+                                | TokenKind::GreaterAmp
+                                | TokenKind::AmpGreater
+                                | TokenKind::AmpGreaterGreater
+                        ) {
+                            let fd: u32 = w.parse().unwrap_or(1);
+                            self.advance(); // skip the fd number
+                            redirects.push(self.parse_redirect_with_fd(fd)?);
+                            continue;
+                        }
+                    }
+                    args.push(self.expect_word_value()?);
+                }
                 Some(TokenKind::Word(_)) => {
                     args.push(self.expect_word_value()?);
                 }
@@ -629,6 +706,48 @@ impl<'a> Parser<'a> {
             body,
             span,
         })
+    }
+
+    fn parse_redirect_with_fd(&mut self, fd: u32) -> Result<Redirect, ParseError> {
+        let token = self.peek_token()?;
+        let span = token.span;
+        let kind = match &token.kind {
+            TokenKind::LessThan => RedirectKind::Input,
+            TokenKind::GreaterThan => RedirectKind::Output,
+            TokenKind::GreaterGreater => RedirectKind::Append,
+            TokenKind::LessLess => RedirectKind::HereDoc,
+            TokenKind::LessLessLess => RedirectKind::HereString,
+            TokenKind::LessAmp => RedirectKind::FdInput,
+            TokenKind::GreaterAmp => RedirectKind::FdOutput,
+            TokenKind::AmpGreater => RedirectKind::FdOutput,
+            TokenKind::AmpGreaterGreater => RedirectKind::FdAppend,
+            _ => unreachable!(),
+        };
+        self.advance();
+        self.skip_comments();
+        let target = self.expect_word_value_with_quoted()?;
+
+        let mut body = None;
+        if kind == RedirectKind::HereDoc || kind == RedirectKind::HereString {
+            if let Ok(next) = self.peek_token() {
+                if let TokenKind::HereDocBody(content) = &next.kind {
+                    body = Some(content.clone());
+                    self.advance();
+                }
+            }
+        }
+
+        Ok(Redirect {
+            fd: Some(fd),
+            kind,
+            target,
+            body,
+            span,
+        })
+    }
+
+    fn is_fd_prefix(w: &str) -> bool {
+        !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit())
     }
 
     fn expect_word_value(&mut self) -> Result<String, ParseError> {
