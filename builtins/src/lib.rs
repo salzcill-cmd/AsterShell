@@ -106,6 +106,7 @@ pub const fn builtin_list() -> &'static [(&'static str, &'static str)] {
         ("source", "Execute commands from a file"),
         ("test", "Evaluate conditional expression"),
         ("string", "String manipulation (length, sub, match, etc.)"),
+        ("compgen", "Generate completion candidates"),
     ]
 }
 

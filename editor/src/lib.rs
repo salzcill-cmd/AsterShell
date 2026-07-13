@@ -10,6 +10,7 @@ use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter as RustyHighlighter;
 use rustyline::hint::Hinter;
 use rustyline::validate::Validator;
+use rustyline::config::EditMode;
 use rustyline::{Editor, Helper};
 
 use aster_theme::Theme;
@@ -116,10 +117,16 @@ impl EditorWrapper {
     /// # Errors
     ///
     /// Returns an error if the editor fails to initialize.
-    pub fn new(theme: Box<dyn Theme>) -> rustyline::Result<Self> {
+    pub fn new(theme: Box<dyn Theme>, edit_mode: &str) -> rustyline::Result<Self> {
+        let mode = match edit_mode {
+            "vi" => EditMode::Vi,
+            _ => EditMode::Emacs,
+        };
+
         let config = rustyline::config::Config::builder()
             .history_ignore_space(true)
             .history_ignore_dups(true)?
+            .edit_mode(mode)
             .build();
 
         let history_cache = Self::load_history_cache();

@@ -128,7 +128,7 @@ impl Shell {
             .unwrap_or_else(|| Box::new(aster_theme::DefaultTheme));
 
         // Create the line editor
-        let mut editor = match aster_editor::EditorWrapper::new(theme) {
+        let mut editor = match aster_editor::EditorWrapper::new(theme, &self.config.shell.edit_mode) {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("aster: failed to initialize editor: {e}");

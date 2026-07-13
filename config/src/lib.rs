@@ -40,6 +40,16 @@ pub struct Config {
 pub struct ShellConfig {
     /// Whether to print the welcome banner on startup.
     pub welcome_message: bool,
+    /// Editor mode: "emacs" (default) or "vi".
+    #[serde(default = "default_edit_mode")]
+    pub edit_mode: String,
+    /// Right prompt segments (displayed on the right side of the terminal).
+    #[serde(default)]
+    pub rprompt_segments: Vec<String>,
+}
+
+fn default_edit_mode() -> String {
+    "emacs".into()
 }
 
 /// Prompt display settings.
@@ -80,6 +90,8 @@ impl Default for ShellConfig {
     fn default() -> Self {
         Self {
             welcome_message: true,
+            edit_mode: "emacs".into(),
+            rprompt_segments: Vec::new(),
         }
     }
 }

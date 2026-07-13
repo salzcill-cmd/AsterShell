@@ -1494,6 +1494,9 @@ impl Executor {
                 ctx.variables.insert(var_name.to_string(), input);
                 return Ok(ExecOutcome::Success(0));
             }
+            "compgen" => {
+                return Self::builtin_compgen(&expanded_cmd.args, ctx);
+            }
             _ => {}
         }
 
@@ -1795,6 +1798,176 @@ impl Executor {
         }
         ctx.last_exit_code = last_code;
         Ok(ExecOutcome::Success(last_code))
+    }
+
+    fn builtin_compgen(args: &[String], ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
+        let mut word = String::new();
+        let mut options = Vec::new();
+
+        let mut i = 0;
+        while i < args.len() {
+            if args[i] == "-W" {
+                i += 1;
+                if let Some(w) = args.get(i) {
+                    options.push(("W", w.clone()));
+                }
+            } else if args[i] == "-A" {
+                i += 1;
+                if let Some(a) = args.get(i) {
+                    options.push(("A", a.clone()));
+                }
+            } else if args[i].starts_with('-') {
+                // -a, -b, -c, -d, -e, -f, -g, -v, -u, -k, -s, -t
+                let flags: Vec<char> = args[i].trim_start_matches('-').chars().collect();
+                for f in flags {
+                    options.push(("F", f.to_string()));
+                }
+            } else {
+                word = args[i].clone();
+            }
+            i += 1;
+        }
+
+        let mut completions = Vec::new();
+
+        // Check for -W (word list)
+        for (kind, val) in &options {
+            if *kind == "W" {
+                for w in val.split_whitespace() {
+                    if w.starts_with(&word) || word.is_empty() {
+                        completions.push(w.to_string());
+                    }
+                }
+            }
+        }
+
+        // Check for -A (action) and -F (flags)
+        let mut actions = Vec::new();
+        let mut flags = Vec::new();
+        for (kind, val) in &options {
+            match *kind {
+                "A" => actions.push(val.as_str()),
+                "F" => flags.push(val.as_str()),
+                _ => {}
+            }
+        }
+
+        // If no -W, generate from flags/actions
+        if !actions.is_empty() || !flags.is_empty() {
+            for action in &actions {
+                match *action {
+                    "command" | "c" => {
+                        let cmds = aster_completion::Completer::complete_commands();
+                        for c in cmds {
+                            if c.text.starts_with(&word) {
+                                completions.push(c.text);
+                            }
+                        }
+                    }
+                    "file" | "f" => {
+                        let files = aster_completion::Completer::complete_files(&word);
+                        for f in files {
+                            completions.push(f.text);
+                        }
+                    }
+                    "directory" | "d" => {
+                        let dirs = aster_completion::Completer::complete_directories(&word);
+                        for d in dirs {
+                            completions.push(d.text);
+                        }
+                    }
+                    "variable" | "v" => {
+                        for (name, _) in &ctx.variables {
+                            if name.starts_with(&word) {
+                                completions.push(name.clone());
+                            }
+                        }
+                    }
+                    "export" | "e" => {
+                        for (name, _) in &ctx.variables {
+                            if name.starts_with(&word) {
+                                completions.push(name.clone());
+                            }
+                        }
+                    }
+                    "alias" | "a" => {
+                        for (name, _) in ctx.aliases.entries() {
+                            if name.starts_with(&word) {
+                                completions.push(name.to_string());
+                            }
+                        }
+                    }
+                    "builtin" | "b" => {
+                        for (name, _) in aster_builtins::builtin_list() {
+                            if name.starts_with(&word) {
+                                completions.push(name.to_string());
+                            }
+                        }
+                    }
+                    "job" | "j" => {
+                        // Not implemented
+                    }
+                    _ => {}
+                }
+            }
+
+            for flag in &flags {
+                match *flag {
+                    "a" => {
+                        for (name, _) in ctx.aliases.entries() {
+                            if name.starts_with(&word) {
+                                completions.push(name.to_string());
+                            }
+                        }
+                    }
+                    "b" => {
+                        for (name, _) in aster_builtins::builtin_list() {
+                            if name.starts_with(&word) {
+                                completions.push(name.to_string());
+                            }
+                        }
+                    }
+                    "c" | "e" | "g" | "k" | "s" | "t" | "v" | "u" => {
+                        // Simplified — most map to variable name completion
+                        for (name, _) in &ctx.variables {
+                            if name.starts_with(&word) {
+                                completions.push(name.clone());
+                            }
+                        }
+                    }
+                    "f" => {
+                        let files = aster_completion::Completer::complete_files(&word);
+                        for f in files {
+                            completions.push(f.text);
+                        }
+                    }
+                    "d" => {
+                        let dirs = aster_completion::Completer::complete_directories(&word);
+                        for d in dirs {
+                            completions.push(d.text);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Default: if nothing specified, complete commands
+        if completions.is_empty() && actions.is_empty() && flags.is_empty() && options.is_empty() {
+            let cmds = aster_completion::Completer::complete_commands();
+            for c in cmds {
+                if c.text.starts_with(&word) {
+                    completions.push(c.text);
+                }
+            }
+        }
+
+        completions.sort();
+        completions.dedup();
+        for c in &completions {
+            println!("{c}");
+        }
+        Ok(ExecOutcome::Success(0))
     }
 
     fn builtin_cd(args: &[String], ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {

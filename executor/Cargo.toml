@@ -16,6 +16,7 @@ aster-shell-core.workspace = true
 aster-parser.workspace = true
 aster-lexer.workspace = true
 aster-builtins.workspace = true
+aster-completion.workspace = true
 aster-utils.workspace = true
 dirs.workspace = true
 libc.workspace = true
