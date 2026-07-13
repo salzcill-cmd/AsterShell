@@ -151,7 +151,7 @@ impl Executor {
                 if ctx.in_loop {
                     Ok(ExecOutcome::Continue)
                 } else {
-                    Err(ShellError::Exec(ExecError::BreakOutsideLoop))
+                    Err(ShellError::Exec(ExecError::ContinueOutsideLoop))
                 }
             }
             Statement::Compound(stmts, _span) => {
@@ -833,6 +833,7 @@ impl Executor {
             }
             "clear" => {
                 print!("\x1B[2J\x1B[H");
+                let _ = std::io::stdout().flush();
                 return Ok(ExecOutcome::Success(0));
             }
             "jobs" => {
@@ -876,12 +877,12 @@ impl Executor {
                     eprintln!("kill: usage: kill [-signal] pid");
                     return Ok(ExecOutcome::Success(1));
                 }
-                let sig = 15; // SIGTERM default
+                let mut sig = 15; // SIGTERM default
                 let pid_str = if expanded_cmd.args[0].starts_with('-') {
-                    let _ = expanded_cmd.args[0]
+                    sig = expanded_cmd.args[0]
                         .trim_start_matches('-')
                         .parse::<i32>()
-                        .unwrap_or(sig);
+                        .unwrap_or(15);
                     expanded_cmd.args.get(1).map(String::as_str).unwrap_or("0")
                 } else {
                     expanded_cmd.args[0].as_str()
@@ -1036,6 +1037,10 @@ impl Executor {
 
         env::set_current_dir(&target)
             .map_err(|e| ExecError::CdError(format!("{}: {}", target.display(), e)))?;
+
+        if args.first().map_or(false, |a| a == "-") {
+            println!("{}", target.display());
+        }
 
         ctx.prev_dir = Some(current);
         Ok(ExecOutcome::Success(0))

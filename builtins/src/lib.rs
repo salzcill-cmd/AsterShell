@@ -33,7 +33,7 @@ pub fn is_builtin(name: &str) -> bool {
             | "wait"
             | "eval"
             | "source"
-            |         "test"
+            | "test"
             | "["
             | "string"
     )
@@ -130,10 +130,23 @@ fn echo(args: &[String]) -> Result<i32, ExecError> {
     let mut text = output.join(" ");
 
     if print_escape {
-        text = text
-            .replace("\\n", "\n")
-            .replace("\\t", "\t")
-            .replace("\\\\", "\\");
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.peek() {
+                    Some('n') => { chars.next(); out.push('\n'); }
+                    Some('t') => { chars.next(); out.push('\t'); }
+                    Some('\\') => { chars.next(); out.push('\\'); }
+                    Some('r') => { chars.next(); out.push('\r'); }
+                    Some('0') => { chars.next(); break; }
+                    _ => out.push(c),
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        text = out;
     }
 
     print!("{text}");
@@ -465,7 +478,7 @@ fn string_length(args: &[String]) -> Result<i32, ExecError> {
         return Ok(1);
     }
     for arg in args {
-        println!("{}", arg.len());
+        println!("{}", arg.chars().count());
     }
     Ok(0)
 }
@@ -482,21 +495,16 @@ fn string_sub(args: &[String]) -> Result<i32, ExecError> {
         return Ok(1);
     }
     for arg in text_args {
+        let char_count = arg.chars().count();
         let (start, end) = if let Some(colon_pos) = range_str.find(':') {
             let start: usize = range_str[..colon_pos].parse().unwrap_or(0);
-            let end: usize = range_str[colon_pos + 1..].parse().unwrap_or(arg.len());
+            let end: usize = range_str[colon_pos + 1..].parse().unwrap_or(char_count);
             (start, end)
         } else {
             let start: usize = range_str.parse().unwrap_or(0);
-            (start, arg.len())
+            (start, char_count)
         };
-        let clamped_start = start.min(arg.len());
-        let clamped_end = end.min(arg.len());
-        let result = if clamped_start < clamped_end {
-            &arg[clamped_start..clamped_end]
-        } else {
-            ""
-        };
+        let result: String = arg.chars().skip(start).take(end.saturating_sub(start)).collect();
         println!("{result}");
     }
     Ok(0)

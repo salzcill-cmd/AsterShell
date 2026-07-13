@@ -37,11 +37,6 @@ impl Highlighter {
         let mut expect_command = false;
 
         for token in &tokens {
-            match &token.kind {
-                TokenKind::Eof => break,
-                _ => {}
-            }
-
             let span = token.span;
 
             if span.offset > prev_end {

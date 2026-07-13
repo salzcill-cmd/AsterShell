@@ -24,7 +24,7 @@ struct GitStatus {
 pub struct Prompt {
     /// Whether to show the exit-status indicator.
     pub show_status: bool,
-    /// The prompt symbol (e.g. `❯`).
+    /// The prompt symbol (e.g. `>`).
     pub symbol: String,
     /// Segments to render (e.g. `["user", "dir", "git"]`).
     pub segments: Vec<String>,
@@ -338,7 +338,7 @@ impl Prompt {
 
         let status = if self.show_status && last_exit_code != 0 {
             let style = Style::new().fg(AnsiColor::Red).bold();
-            format!(" {}", style.paint("\u{2717}"))
+            format!(" {}", style.paint("x"))
         } else {
             String::new()
         };
@@ -358,7 +358,7 @@ impl Default for Prompt {
     fn default() -> Self {
         Self {
             show_status: true,
-            symbol: "\u{276f}".into(),
+            symbol: ">".into(),
             segments: vec![
                 "status".into(),
                 "dir".into(),
@@ -379,14 +379,14 @@ mod tests {
     fn test_prompt_render_success() {
         let p = Prompt::default();
         let rendered = p.render(0, std::time::Duration::ZERO);
-        assert!(rendered.contains('\u{276f}'));
+        assert!(rendered.contains('>'));
     }
 
     #[test]
     fn test_prompt_render_failure() {
         let p = Prompt::default();
         let rendered = p.render(1, std::time::Duration::ZERO);
-        assert!(rendered.contains('\u{2717}') || rendered.contains("[1]"));
+        assert!(rendered.contains('x') || rendered.contains("[1]"));
     }
 
     #[test]

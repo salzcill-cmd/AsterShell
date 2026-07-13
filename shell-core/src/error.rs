@@ -199,6 +199,9 @@ pub enum ExecError {
     /// Break/continue outside loop.
     #[error("break/continue outside loop")]
     BreakOutsideLoop,
+    /// Continue outside loop.
+    #[error("continue outside loop")]
+    ContinueOutsideLoop,
     /// Return outside function.
     #[error("return outside function")]
     ReturnOutsideFunction,
@@ -220,6 +223,7 @@ impl ExecError {
             Self::FunctionNotFound(_)
             | Self::VariableError(_)
             | Self::BreakOutsideLoop
+            | Self::ContinueOutsideLoop
             | Self::ReturnOutsideFunction
             | Self::IntegerOverflow
             | Self::ArithmeticError(_)

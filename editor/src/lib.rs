@@ -196,12 +196,13 @@ impl EditorWrapper {
         if trimmed.ends_with('\\') {
             return false;
         }
-        if trimmed.ends_with('|') || trimmed.ends_with('&') || trimmed.ends_with(';') {
+        if trimmed.ends_with('|') || trimmed.ends_with(';') {
             return false;
         }
         if trimmed.ends_with("&&") || trimmed.ends_with("||") {
             return false;
         }
+        // trailing `&` is valid — command runs in background
 
         if let Some(heredoc_delim) = Self::find_pending_heredoc(input) {
             let lines: Vec<&str> = input.lines().collect();
@@ -398,10 +399,14 @@ mod tests {
     fn test_is_input_complete_trailing_operators() {
         assert!(!EditorWrapper::is_input_complete("echo hello\\"));
         assert!(!EditorWrapper::is_input_complete("echo hello |"));
-        assert!(!EditorWrapper::is_input_complete("echo hello &"));
+        assert!(!EditorWrapper::is_input_complete("echo hello ;"));
         assert!(!EditorWrapper::is_input_complete("echo hello &&"));
         assert!(!EditorWrapper::is_input_complete("echo hello ||"));
-        assert!(!EditorWrapper::is_input_complete("echo hello ;"));
+    }
+
+    #[test]
+    fn test_is_input_complete_background() {
+        assert!(EditorWrapper::is_input_complete("echo hello &"));
     }
 
     #[test]

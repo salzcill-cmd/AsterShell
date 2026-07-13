@@ -88,7 +88,7 @@ impl Default for PromptConfig {
     fn default() -> Self {
         Self {
             show_status: true,
-            symbol: "\u{276f}".into(),
+            symbol: ">".into(),
             segments: default_segments(),
         }
     }
