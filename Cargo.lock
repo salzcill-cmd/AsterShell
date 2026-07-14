@@ -40,6 +40,7 @@ dependencies = [
  "aster-utils",
  "ctrlc",
  "dirs",
+ "libc",
  "tracing",
  "tracing-subscriber",
 ]

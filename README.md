@@ -135,9 +135,9 @@ fg %1
 
 Set `edit_mode = "vi"` in your config and you get proper modal editing with rustyline's Vi implementation. Normal mode, insert mode, visual mode — all there.
 
-### Shell Builtins (27)
+### Shell Builtins (28)
 
-`echo` · `printf` · `pwd` · `true` · `false` · `which` · `type` · `alias` · `unalias` · `export` · `unset` · `env` · `pushd` · `popd` · `dirs` · `eval` · `source` · `test` · `trap` · `exec` · `set` · `read` · `shift` · `wait` · `jobs` · `fg` · `bg` · `kill` · `disown` · `compgen` · `string` · `mapfile` · `dirname` · `basename` · `help` · `version`
+`echo` · `printf` · `pwd` · `true` · `false` · `which` · `type` · `alias` · `unalias` · `export` · `unset` · `env` · `pushd` · `popd` · `dirs` · `eval` · `source` · `test` · `trap` · `exec` · `set` · `read` · `shift` · `wait` · `jobs` · `fg` · `bg` · `kill` · `disown` · `compgen` · `string` · `mapfile` · `dirname` · `basename` · `command` · `help` · `version`
 
 ### Themes
 

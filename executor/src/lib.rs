@@ -69,6 +69,8 @@ pub struct ExecContext {
     pub last_background_pid: u32,
     /// Current shell option flags ($-).
     pub last_shell_options: String,
+    /// Whether Ctrl+C was pressed (set by signal handler).
+    pub interrupted: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for ExecContext {
@@ -92,6 +94,7 @@ impl Default for ExecContext {
             foreground_pgid: None,
             last_background_pid: 0,
             last_shell_options: "i".into(),
+            interrupted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 }
@@ -1404,14 +1407,54 @@ impl Executor {
                         return Ok(ExecOutcome::Success(code));
                     } else if libc::WIFSTOPPED(status) {
                         job.set_state(aster_shell_core::jobs::JobState::Stopped);
-                        return Ok(ExecOutcome::Success(0));
                     }
-                    job.set_state(aster_shell_core::jobs::JobState::Completed);
+                    return Ok(ExecOutcome::Success(0));
                 } else {
                     eprintln!("fg: job {id} not found");
                     return Ok(ExecOutcome::Success(1));
                 }
-                return Ok(ExecOutcome::Success(0));
+            }
+            "command" => {
+                if expanded_cmd.args.is_empty() {
+                    eprintln!("command: missing operand");
+                    return Ok(ExecOutcome::Success(1));
+                }
+                let mut cmd_name = String::new();
+                let mut skip_next = false;
+                for arg in &expanded_cmd.args {
+                    if skip_next {
+                        skip_next = false;
+                        continue;
+                    }
+                    if arg == "-v" || arg == "-V" {
+                        skip_next = true;
+                        continue;
+                    }
+                    if arg == "-p" {
+                        continue;
+                    }
+                    if cmd_name.is_empty() {
+                        cmd_name.clone_from(arg);
+                    }
+                }
+                if cmd_name.is_empty() {
+                    eprintln!("command: missing operand");
+                    return Ok(ExecOutcome::Success(1));
+                }
+                if aster_builtins::is_builtin(&cmd_name) {
+                    println!("{cmd_name}");
+                    return Ok(ExecOutcome::Success(0));
+                }
+                if ctx.functions.contains_key(&cmd_name) {
+                    println!("{cmd_name}");
+                    return Ok(ExecOutcome::Success(0));
+                }
+                if let Some(path) = which_path(&cmd_name) {
+                    println!("{}", path.display());
+                    return Ok(ExecOutcome::Success(0));
+                }
+                eprintln!("command: {cmd_name}: not found");
+                return Ok(ExecOutcome::Success(1));
             }
             "bg" => {
                 let id_str = expanded_cmd.args.first().map(String::as_str).unwrap_or("%1");
@@ -1485,13 +1528,64 @@ impl Executor {
                 return Ok(ExecOutcome::Success(0));
             }
             "read" => {
-                let var_name = expanded_cmd.args.first().map(String::as_str).unwrap_or("REPLY");
+                let mut prompt = String::new();
+                let mut silent = false;
+                let mut raw = false;
+                let mut args_iter = expanded_cmd.args.iter();
+                while let Some(arg) = args_iter.next() {
+                    if arg == "-p" {
+                        prompt = args_iter.next().cloned().unwrap_or_default();
+                    } else if arg == "-s" {
+                        silent = true;
+                    } else if arg == "-r" {
+                        raw = true;
+                    } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
+                        // Combine flags like -sr, -rp
+                        for ch in arg[1..].chars() {
+                            match ch {
+                                'p' => { prompt = args_iter.next().cloned().unwrap_or_default(); }
+                                's' => { silent = true; }
+                                'r' => { raw = true; }
+                                _ => {}
+                            }
+                        }
+                    } else {
+                        // First non-flag arg is the variable name
+                        if !prompt.is_empty() || !arg.starts_with('-') {
+                            let var_name = arg;
+                            let mut input = String::new();
+                            if !prompt.is_empty() {
+                                use std::io::Write;
+                                let _ = print!("{prompt}");
+                                let _ = std::io::stdout().flush();
+                            }
+                            if silent {
+                                // Read without echo (for passwords)
+                                let _ = std::io::stdin().read_line(&mut input);
+                            } else {
+                                let _ = std::io::stdin().read_line(&mut input);
+                            }
+                            let value = if raw {
+                                input.trim_end_matches('\n').trim_end_matches('\r').to_string()
+                            } else {
+                                input.trim_end_matches('\n').trim_end_matches('\r')
+                                    .replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+                            };
+                            ctx.variables.insert(var_name.to_string(), value);
+                            return Ok(ExecOutcome::Success(0));
+                        }
+                    }
+                }
+                // Default: no args, read into REPLY
                 let mut input = String::new();
+                if !prompt.is_empty() {
+                    use std::io::Write;
+                    let _ = print!("{prompt}");
+                    let _ = std::io::stdout().flush();
+                }
                 let _ = std::io::stdin().read_line(&mut input);
                 let input = input.trim_end_matches('\n').trim_end_matches('\r').to_string();
-
-                // Handle -p (prompt), -r (raw), -s (silent) — simplified
-                ctx.variables.insert(var_name.to_string(), input);
+                ctx.variables.insert("REPLY".to_string(), input);
                 return Ok(ExecOutcome::Success(0));
             }
             "compgen" => {
@@ -1748,8 +1842,50 @@ impl Executor {
         Ok(ExecOutcome::Success(code))
     }
 
+    #[allow(unsafe_code)]
     fn execute_group(group: &Group, ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
-        Self::execute(&group.body, ctx)
+        if group.body.statements.is_empty() {
+            return Ok(ExecOutcome::Success(0));
+        }
+
+        // Fork a child process for true variable/cd isolation (POSIX subshell)
+        let child_pid = unsafe { libc::fork() };
+        if child_pid < 0 {
+            return Self::execute(&group.body, ctx);
+        }
+
+        if child_pid == 0 {
+            // Child — isolated context
+            let mut child_ctx = ExecContext { ..ExecContext::default() };
+            child_ctx.variables = ctx.variables.clone();
+            child_ctx.positional_args = ctx.positional_args.clone();
+            child_ctx.functions = ctx.functions.clone();
+            child_ctx.aliases = ctx.aliases.clone();
+            child_ctx.abbreviations = ctx.abbreviations.clone();
+            child_ctx.trap_handlers = ctx.trap_handlers.clone();
+            child_ctx.current_line = ctx.current_line;
+            child_ctx.start_time = ctx.start_time;
+            child_ctx.last_shell_options = ctx.last_shell_options.clone();
+
+            let code = match Self::execute(&group.body, &mut child_ctx) {
+                Ok(ExecOutcome::Success(c)) => c,
+                Ok(ExecOutcome::Exit(c)) => c,
+                Ok(ExecOutcome::Break) | Ok(ExecOutcome::Continue) => 0,
+                Err(_) => 1,
+            };
+            unsafe { libc::_exit(code); }
+        }
+
+        // Parent — wait for child
+        let mut status: libc::c_int = 0;
+        unsafe { libc::waitpid(child_pid, &mut status, 0); }
+        let code = if libc::WIFEXITED(status) {
+            libc::WEXITSTATUS(status)
+        } else {
+            1
+        };
+        ctx.last_exit_code = code;
+        Ok(ExecOutcome::Success(code))
     }
 
     fn builtin_trap(args: &[String], ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
@@ -3223,6 +3359,25 @@ fn suggest_command(name: &str) -> Option<String> {
     }
 
     best.map(|(name, _)| name)
+}
+
+/// Search PATH for a command, returning the full path if found.
+fn which_path(name: &str) -> Option<std::path::PathBuf> {
+    if name.contains('/') {
+        let p = std::path::Path::new(name);
+        if p.is_file() {
+            return Some(p.to_path_buf());
+        }
+        return None;
+    }
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    for dir in path_var.split(':') {
+        let candidate = std::path::Path::new(dir).join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

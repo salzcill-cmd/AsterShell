@@ -111,6 +111,7 @@ pub const fn builtin_list() -> &'static [(&'static str, &'static str)] {
         ("mapfile", "Read lines into array variable"),
         ("dirname", "Strip last component from file name"),
         ("basename", "Strip directory from file name"),
+        ("command", "Run or describe a command"),
     ]
 }
 
@@ -169,10 +170,43 @@ fn printf(args: &[String]) -> Result<i32, ExecError> {
     let mut result = String::new();
     let mut arg_idx = 1;
     let mut chars = format.chars().peekable();
-    let mut print_newline = true;
 
     while let Some(c) = chars.next() {
-        if c == '%' {
+        if c == '\\' {
+            // Interpret backslash escapes in the format string
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('\\') => result.push('\\'),
+                Some('0') => result.push('\0'),
+                Some('a') => result.push('\x07'),
+                Some('b') => result.push('\x08'),
+                Some('f') => result.push('\x0C'),
+                Some('v') => result.push('\x0B'),
+                Some('x') => {
+                    // \xHH hex escape
+                    let mut hex = String::new();
+                    for _ in 0..2 {
+                        if let Some(h) = chars.next() {
+                            if h.is_ascii_hexdigit() {
+                                hex.push(h);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                        result.push(byte as char);
+                    }
+                }
+                Some(c) => {
+                    result.push('\\');
+                    result.push(c);
+                }
+                None => result.push('\\'),
+            }
+        } else if c == '%' {
             match chars.peek() {
                 Some('s') => {
                     chars.next();
@@ -202,7 +236,6 @@ fn printf(args: &[String]) -> Result<i32, ExecError> {
                     arg_idx += 1;
                 }
                 Some('b') => {
-                    // %b: interpret escapes in argument
                     chars.next();
                     let arg = args.get(arg_idx).map(String::as_str).unwrap_or("");
                     let expanded = arg
@@ -229,16 +262,7 @@ fn printf(args: &[String]) -> Result<i32, ExecError> {
         }
     }
 
-    // Check if format string ends with % (no newline after last format)
-    if !format.ends_with('%') {
-        // Standard printf behavior: no trailing newline
-        print!("{result}");
-    } else {
-        print!("{result}");
-        print_newline = false;
-    }
-
-    let _ = print_newline; // printf doesn't add newline by default
+    print!("{result}");
     Ok(0)
 }
 
@@ -455,55 +479,108 @@ fn test_cmd(args: &[String]) -> Result<i32, ExecError> {
         return Ok(1);
     }
 
-    // Simple test: -f, -d, -e file tests
+    // Handle unary file tests: -f, -d, -e, -r, -w, -x, -z, -n, -s, -L
     match args.first().map(String::as_str) {
         Some("-f") => {
-            if args.len() < 2 {
-                return Ok(1);
-            }
+            if args.len() < 2 { return Ok(1); }
             let path = std::path::Path::new(&args[1]);
             Ok(i32::from(!path.is_file()))
         }
         Some("-d") => {
-            if args.len() < 2 {
-                return Ok(1);
-            }
+            if args.len() < 2 { return Ok(1); }
             let path = std::path::Path::new(&args[1]);
             Ok(i32::from(!path.is_dir()))
         }
         Some("-e") => {
-            if args.len() < 2 {
-                return Ok(1);
-            }
+            if args.len() < 2 { return Ok(1); }
             let path = std::path::Path::new(&args[1]);
             Ok(i32::from(!path.exists()))
         }
+        Some("-r") => {
+            if args.len() < 2 { return Ok(1); }
+            let path = std::path::Path::new(&args[1]);
+            use std::os::unix::fs::PermissionsExt;
+            let meta = path.metadata().map(|m| m.permissions());
+            Ok(i32::from(!matches!(meta, Ok(p) if p.mode() & 0o444 != 0)))
+        }
+        Some("-w") => {
+            if args.len() < 2 { return Ok(1); }
+            let path = std::path::Path::new(&args[1]);
+            use std::os::unix::fs::PermissionsExt;
+            let meta = path.metadata().map(|m| m.permissions());
+            Ok(i32::from(!matches!(meta, Ok(p) if p.mode() & 0o222 != 0)))
+        }
+        Some("-x") => {
+            if args.len() < 2 { return Ok(1); }
+            let path = std::path::Path::new(&args[1]);
+            use std::os::unix::fs::PermissionsExt;
+            let meta = path.metadata().map(|m| m.permissions());
+            Ok(i32::from(!matches!(meta, Ok(p) if p.mode() & 0o111 != 0)))
+        }
+        Some("-s") => {
+            if args.len() < 2 { return Ok(1); }
+            let path = std::path::Path::new(&args[1]);
+            let len = path.metadata().map(|m| m.len()).unwrap_or(0);
+            Ok(i32::from(len == 0))
+        }
+        Some("-L") => {
+            if args.len() < 2 { return Ok(1); }
+            let path = std::path::Path::new(&args[1]);
+            Ok(i32::from(!path.is_symlink()))
+        }
         Some("-z") => {
-            if args.len() < 2 {
-                return Ok(1);
-            }
+            if args.len() < 2 { return Ok(1); }
             Ok(i32::from(!args[1].is_empty()))
         }
         Some("-n") => {
-            if args.len() < 2 {
-                return Ok(1);
-            }
+            if args.len() < 2 { return Ok(1); }
             Ok(i32::from(args[1].is_empty()))
         }
         Some("=") | Some("==") => {
-            if args.len() < 3 {
-                return Ok(1);
-            }
+            if args.len() < 3 { return Ok(1); }
             Ok(i32::from(args[1] != args[2]))
         }
         Some("!=") => {
-            if args.len() < 3 {
-                return Ok(1);
-            }
+            if args.len() < 3 { return Ok(1); }
             Ok(i32::from(args[1] == args[2]))
         }
+        Some("-eq") => {
+            if args.len() < 3 { return Ok(1); }
+            let a = args[1].parse::<i64>().unwrap_or(0);
+            let b = args[2].parse::<i64>().unwrap_or(0);
+            Ok(i32::from(a != b))
+        }
+        Some("-ne") => {
+            if args.len() < 3 { return Ok(1); }
+            let a = args[1].parse::<i64>().unwrap_or(0);
+            let b = args[2].parse::<i64>().unwrap_or(0);
+            Ok(i32::from(a == b))
+        }
+        Some("-lt") => {
+            if args.len() < 3 { return Ok(1); }
+            let a = args[1].parse::<i64>().unwrap_or(0);
+            let b = args[2].parse::<i64>().unwrap_or(0);
+            Ok(i32::from(a >= b))
+        }
+        Some("-gt") => {
+            if args.len() < 3 { return Ok(1); }
+            let a = args[1].parse::<i64>().unwrap_or(0);
+            let b = args[2].parse::<i64>().unwrap_or(0);
+            Ok(i32::from(a <= b))
+        }
+        Some("-le") => {
+            if args.len() < 3 { return Ok(1); }
+            let a = args[1].parse::<i64>().unwrap_or(0);
+            let b = args[2].parse::<i64>().unwrap_or(0);
+            Ok(i32::from(a > b))
+        }
+        Some("-ge") => {
+            if args.len() < 3 { return Ok(1); }
+            let a = args[1].parse::<i64>().unwrap_or(0);
+            let b = args[2].parse::<i64>().unwrap_or(0);
+            Ok(i32::from(a < b))
+        }
         Some(s) if !s.starts_with('-') => {
-            // test FILE: returns 0 if file exists
             let path = std::path::Path::new(s);
             Ok(i32::from(!path.exists()))
         }

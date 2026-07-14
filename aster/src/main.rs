@@ -23,6 +23,7 @@ struct Shell {
 
 impl Shell {
     /// Initializes the shell: loads config, history, sets up signal handling.
+    #[allow(unsafe_code)]
     fn init() -> Result<Self, ShellError> {
         let config = aster_config::ensure_config()?;
         let history = History::new(config.history.max_size)?;
@@ -38,9 +39,19 @@ impl Shell {
         }
 
         let running = Arc::new(AtomicBool::new(true));
+        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let r = running.clone();
+        let ic = interrupted.clone();
         if ctrlc::set_handler(move || {
             r.store(false, Ordering::Relaxed);
+            ic.store(true, Ordering::Relaxed);
+            // Send SIGINT to the foreground process group if one exists
+            unsafe {
+                let pgid = libc::getpgid(0);
+                if pgid > 0 {
+                    libc::kill(-pgid, libc::SIGINT);
+                }
+            }
         })
         .is_err()
         {
@@ -55,6 +66,7 @@ impl Shell {
                 prev_dir: None,
                 aliases,
                 abbreviations,
+                interrupted,
                 ..ExecContext::default()
             },
             running,
@@ -198,6 +210,11 @@ impl Shell {
             // Lex + Parse + Execute
             if let Err(e) = self.execute_line(trimmed) {
                 eprintln!("aster: {e}");
+            }
+
+            // Handle Ctrl-C during command execution
+            if self.ctx.interrupted.swap(false, Ordering::Relaxed) {
+                eprintln!();
             }
 
             // Record command duration
