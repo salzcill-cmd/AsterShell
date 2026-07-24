@@ -127,6 +127,11 @@ impl<'a> Parser<'a> {
                     self.advance();
                     return Ok(Statement::Continue(span));
                 }
+                "time" => {
+                    self.advance();
+                    let inner = self.parse_statement()?;
+                    return Ok(Statement::Time(Box::new(inner)));
+                }
                 _ => {}
             }
         }
@@ -149,6 +154,8 @@ impl<'a> Parser<'a> {
         // Check for [[ ... ]] double-bracket test
         let mut left = if let Some(stmt) = self.try_parse_double_bracket()? {
             stmt
+        } else if let Some(stmt) = self.try_parse_arithmetic()? {
+            stmt
         } else {
             // Regular pipe with && / ||
             Statement::Pipe(self.parse_pipe()?)
@@ -160,6 +167,8 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let right = if let Some(stmt) = self.try_parse_double_bracket()? {
                     stmt
+                } else if let Some(stmt) = self.try_parse_arithmetic()? {
+                    stmt
                 } else {
                     Statement::Pipe(self.parse_pipe()?)
                 };
@@ -167,6 +176,8 @@ impl<'a> Parser<'a> {
             } else if self.peek_is(&TokenKind::PipePipe) {
                 self.advance();
                 let right = if let Some(stmt) = self.try_parse_double_bracket()? {
+                    stmt
+                } else if let Some(stmt) = self.try_parse_arithmetic()? {
                     stmt
                 } else {
                     Statement::Pipe(self.parse_pipe()?)
@@ -676,6 +687,69 @@ impl<'a> Parser<'a> {
                 }
                 let span = Span::merge(start, self.prev_span());
                 return Ok(Some(Statement::DoubleBracket(args, span)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Tries to parse `(( ... ))` arithmetic evaluation.
+    fn try_parse_arithmetic(&mut self) -> Result<Option<Statement>, ParseError> {
+        if let Some(TokenKind::Word(w)) = self.peek() {
+            if w == "((" {
+                let start = self.current_span();
+                self.advance(); // skip ((
+                // Collect everything between (( and ))
+                let mut expr = String::new();
+                let mut depth = 1;
+                loop {
+                    self.skip_comments();
+                    if self.at_end() || self.peek_is(&TokenKind::Eof) {
+                        return Err(ParseError::UnexpectedEof {
+                            expected: "))".into(),
+                        });
+                    }
+                    match self.peek_token()?.kind.clone() {
+                        TokenKind::Word(w) => {
+                            if w == "))" {
+                                depth -= 1;
+                                if depth == 0 {
+                                    self.advance();
+                                    break;
+                                }
+                                expr.push_str(&w);
+                            } else {
+                                if !expr.is_empty() {
+                                    expr.push(' ');
+                                }
+                                expr.push_str(&w);
+                            }
+                        }
+                        TokenKind::SingleQuoted(s) => {
+                            expr.push_str(&format!("'{s}'"));
+                        }
+                        TokenKind::DoubleQuoted(s) => {
+                            expr.push_str(&format!("\"{s}\""));
+                        }
+                        TokenKind::Pipe => expr.push('|'),
+                        TokenKind::AmpAmp => {
+                            // Could be && or part of &
+                            // Check if next is also &
+                            // For now just push &
+                            expr.push('&');
+                        }
+                        _ => {
+                            let tok = self.peek_token()?;
+                            return Err(ParseError::UnexpectedToken {
+                                token: tok.display(),
+                                line: tok.span.line,
+                                column: tok.span.column,
+                            });
+                        }
+                    }
+                    self.advance();
+                }
+                let span = Span::merge(start, self.prev_span());
+                return Ok(Some(Statement::Arithmetic(expr, span)));
             }
         }
         Ok(None)

@@ -305,6 +305,115 @@ impl<'a> Lexer<'a> {
                         word.push('{');
                         self.advance();
                         self.read_balanced(&mut word, 1, '}');
+                    } else if self.peek() == Some('\'') {
+                        // $'...' ANSI-C quoting: expand escape sequences
+                        self.advance(); // skip the '
+                        let mut ansi_str = String::new();
+                        while let Some(ch) = self.peek() {
+                            if ch == '\'' {
+                                self.advance(); // skip closing quote
+                                break;
+                            }
+                            if ch == '\\' {
+                                self.advance();
+                                if let Some(esc) = self.peek() {
+                                    match esc {
+                                        'n' => { ansi_str.push('\n'); self.advance(); }
+                                        't' => { ansi_str.push('\t'); self.advance(); }
+                                        'r' => { ansi_str.push('\r'); self.advance(); }
+                                        '\\' => { ansi_str.push('\\'); self.advance(); }
+                                        '\'' => { ansi_str.push('\''); self.advance(); }
+                                        '"' => { ansi_str.push('"'); self.advance(); }
+                                        'a' => { ansi_str.push('\x07'); self.advance(); }
+                                        'b' => { ansi_str.push('\x08'); self.advance(); }
+                                        'e' => { ansi_str.push('\x1B'); self.advance(); }
+                                        'f' => { ansi_str.push('\x0C'); self.advance(); }
+                                        'v' => { ansi_str.push('\x0B'); self.advance(); }
+                                        '0' => {
+                                            self.advance();
+                                            // Octal: up to 3 digits
+                                            let mut octal = String::new();
+                                            for _ in 0..3 {
+                                                if let Some('0'..='7') = self.peek() {
+                                                    octal.push(self.peek().unwrap());
+                                                    self.advance();
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            if let Ok(byte) = u8::from_str_radix(&octal, 8) {
+                                                ansi_str.push(byte as char);
+                                            }
+                                        }
+                                        'x' => {
+                                            self.advance();
+                                            let mut hex = String::new();
+                                            for _ in 0..2 {
+                                                if let Some(c) = self.peek() {
+                                                    if c.is_ascii_hexdigit() {
+                                                        hex.push(c);
+                                                        self.advance();
+                                                    } else {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                                                ansi_str.push(byte as char);
+                                            }
+                                        }
+                                        'u' => {
+                                            self.advance();
+                                            if self.peek() == Some('{') {
+                                                self.advance(); // skip {
+                                                let mut hex = String::new();
+                                                while let Some(c) = self.peek() {
+                                                    if c == '}' {
+                                                        self.advance();
+                                                        break;
+                                                    }
+                                                    hex.push(c);
+                                                    self.advance();
+                                                }
+                                                if let Ok(codepoint) = u32::from_str_radix(&hex, 16) {
+                                                    if let Some(ch) = char::from_u32(codepoint) {
+                                                        ansi_str.push(ch);
+                                                    }
+                                                }
+                                            } else {
+                                                let mut hex = String::new();
+                                                for _ in 0..4 {
+                                                    if let Some(c) = self.peek() {
+                                                        if c.is_ascii_hexdigit() {
+                                                            hex.push(c);
+                                                            self.advance();
+                                                        } else {
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if let Ok(codepoint) = u32::from_str_radix(&hex, 16) {
+                                                    if let Some(ch) = char::from_u32(codepoint) {
+                                                        ansi_str.push(ch);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            ansi_str.push('\\');
+                                            ansi_str.push(esc);
+                                            self.advance();
+                                        }
+                                    }
+                                }
+                            } else {
+                                ansi_str.push(ch);
+                                self.advance();
+                            }
+                        }
+                        // Replace the $ with the expanded string
+                        word.pop(); // remove the $
+                        word.push_str(&ansi_str);
                     }
                 }
                 '{' => {

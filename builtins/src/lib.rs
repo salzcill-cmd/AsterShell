@@ -298,16 +298,69 @@ fn type_cmd(args: &[String], aliases: &AliasMap) -> Result<i32, ExecError> {
     if args.is_empty() {
         return Err(ExecError::CommandNotFound("type: missing argument".into()));
     }
-    let mut exit_code = 0;
+    let mut all = false;
+    let mut path_only = false;
+    let mut type_only = false;
+    let mut names = Vec::new();
+
     for arg in args {
-        if is_builtin(arg) {
-            println!("{arg} is a shell builtin");
-        } else if let Some(expansion) = aliases.get(arg) {
-            println!("{arg} is aliased to `{expansion}'");
-        } else if let Some(path) = aster_utils::find_executable(arg) {
-            println!("{arg} is {}", path.display());
+        if arg == "-a" {
+            all = true;
+        } else if arg == "-p" {
+            path_only = true;
+        } else if arg == "-t" {
+            type_only = true;
+        } else if arg.starts_with('-') && arg.len() > 1 {
+            // combined flags like -at
+            for ch in arg[1..].chars() {
+                match ch {
+                    'a' => all = true,
+                    'p' => path_only = true,
+                    't' => type_only = true,
+                    _ => {}
+                }
+            }
         } else {
-            eprintln!("type: {arg}: not found");
+            names.push(arg.as_str());
+        }
+    }
+
+    let mut exit_code = 0;
+    for name in &names {
+        if is_builtin(name) {
+            if type_only {
+                println!("builtin");
+            } else if path_only {
+                // builtins don't have a path
+            } else {
+                println!("{name} is a shell builtin");
+            }
+        } else if let Some(expansion) = aliases.get(name) {
+            if type_only {
+                println!("alias");
+            } else if path_only {
+                // aliases don't have a path
+            } else {
+                println!("{name} is aliased to `{expansion}'");
+                if all {
+                    // Also check if it's a command
+                    if let Some(path) = aster_utils::find_executable(name) {
+                        println!("{name} is {}", path.display());
+                    }
+                }
+            }
+        } else if let Some(path) = aster_utils::find_executable(name) {
+            if type_only {
+                println!("file");
+            } else if path_only {
+                println!("{}", path.display());
+            } else {
+                println!("{name} is {}", path.display());
+            }
+        } else {
+            if !type_only && !path_only {
+                eprintln!("type: {name}: not found");
+            }
             exit_code = 1;
         }
     }

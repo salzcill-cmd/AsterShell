@@ -12,7 +12,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-cargo install --path "$PROJECT_DIR"
+cargo install --path "$PROJECT_DIR/aster"
 
 echo "AsterShell installed successfully."
 echo "Run 'aster' to start."

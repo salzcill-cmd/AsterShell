@@ -44,8 +44,12 @@ pub enum Statement {
     Assign(AssignStmt),
     /// Double-bracket test `[[ ... ]]`.
     DoubleBracket(Vec<String>, Span),
+    /// Arithmetic evaluation `(( expr ))`.
+    Arithmetic(String, Span),
     /// Background command: `cmd &`.
     Background(Box<Self>),
+    /// Time a pipeline: `time cmd`.
+    Time(Box<Self>),
 }
 
 impl Statement {
@@ -67,7 +71,9 @@ impl Statement {
             Self::Compound(_, s) => *s,
             Self::Assign(s) => s.span,
             Self::DoubleBracket(_, s) => *s,
+            Self::Arithmetic(_, s) => *s,
             Self::Background(s) => s.span(),
+            Self::Time(s) => s.span(),
         }
     }
 }

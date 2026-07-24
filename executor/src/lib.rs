@@ -71,6 +71,8 @@ pub struct ExecContext {
     pub last_shell_options: String,
     /// Whether Ctrl+C was pressed (set by signal handler).
     pub interrupted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Array variables (name -> elements).
+    pub arrays: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Default for ExecContext {
@@ -95,6 +97,7 @@ impl Default for ExecContext {
             last_background_pid: 0,
             last_shell_options: "i".into(),
             interrupted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            arrays: std::collections::HashMap::new(),
         }
     }
 }
@@ -206,7 +209,24 @@ impl Executor {
                 let result = Self::eval_double_bracket(args, ctx)?;
                 Ok(ExecOutcome::Success(i32::from(!result)))
             }
+            Statement::Arithmetic(expr, _span) => {
+                let result = eval_arithmetic(expr, ctx)?;
+                let code = i32::from(result == 0);
+                Ok(ExecOutcome::Success(code))
+            }
             Statement::Background(inner) => Self::execute_background(inner, ctx),
+            Statement::Time(inner) => {
+                let start = std::time::Instant::now();
+                let outcome = Self::execute_statement(inner, ctx)?;
+                let elapsed = start.elapsed();
+                let real_secs = elapsed.as_secs_f64();
+                let user_secs = real_secs * 0.95; // approximation
+                let sys_secs = real_secs * 0.05;  // approximation
+                eprintln!(
+                    "real\t{real_secs:.3}\nuser\t{user_secs:.3}\nsys\t{sys_secs:.3}"
+                );
+                Ok(outcome)
+            }
         }
     }
 
@@ -667,9 +687,28 @@ impl Executor {
                             i += 1;
 
                             if content.starts_with('#') {
-                                let var_name = &content[1..];
-                                let val = get_var_value(var_name, ctx);
-                                result.push_str(&val.len().to_string());
+                                // Check for ${#arr[@]} — array element count
+                                let inner = &content[1..];
+                                if let Some(bracket_pos) = inner.find('[') {
+                                    if bracket_pos > 0 {
+                                        let var_name = &inner[..bracket_pos];
+                                        let idx_part = &inner[bracket_pos..];
+                                        if idx_part == "[@]" || idx_part == "[*]" {
+                                            let count = ctx.arrays.get(var_name).map_or(0, |a| a.len());
+                                            result.push_str(&count.to_string());
+                                        } else {
+                                            // ${#var} — string length
+                                            let val = get_var_value(var_name, ctx);
+                                            result.push_str(&val.len().to_string());
+                                        }
+                                    } else {
+                                        let val = get_var_value(inner, ctx);
+                                        result.push_str(&val.len().to_string());
+                                    }
+                                } else {
+                                    let val = get_var_value(inner, ctx);
+                                    result.push_str(&val.len().to_string());
+                                }
                             } else {
                                 let mut var_name_end = 0;
                                 for c in content.chars() {
@@ -682,7 +721,64 @@ impl Executor {
                                 let var_name = &content[..var_name_end];
                                 let rest = &content[var_name_end..];
 
-                                if rest.is_empty() {
+                                // Check for array access: [N], [@], [*]
+                                if rest.starts_with('[') && !rest.starts_with("[:") {
+                                    let idx_content = &rest[1..];
+                                    if let Some(close) = idx_content.find(']') {
+                                        let idx_str = &idx_content[..close];
+                                        let after = &idx_content[close + 1..];
+                                        let arr = ctx.arrays.get(var_name);
+                                        if idx_str == "@" || idx_str == "*" {
+                                            // ${arr[@]} / ${arr[*]} — all elements
+                                            if let Some(elems) = arr {
+                                                result.push_str(&elems.join(" "));
+                                            }
+                                        } else if let Ok(idx) = idx_str.parse::<isize>() {
+                                            if let Some(elems) = arr {
+                                                let actual_idx = if idx < 0 {
+                                                    let len = elems.len() as isize;
+                                                    (len + idx) as usize
+                                                } else {
+                                                    idx as usize
+                                                };
+                                                if actual_idx < elems.len() {
+                                                    let val = &elems[actual_idx];
+                                                    // Check for substring: ${arr[i]:offset:length}
+                                                    if after.starts_with(':') {
+                                                        let substr = &after[1..];
+                                                        let chars: Vec<char> = val.chars().collect();
+                                                        let vlen = chars.len();
+                                                        if let Some(colon2) = substr.find(':') {
+                                                            let off: usize = substr[..colon2].parse().unwrap_or(0);
+                                                            let len: usize = substr[colon2+1..].parse().unwrap_or(vlen);
+                                                            let end = (off + len).min(vlen);
+                                                            if off < vlen {
+                                                                result.push_str(&chars[off..end].iter().collect::<String>());
+                                                            }
+                                                        } else {
+                                                            let off: usize = substr.parse().unwrap_or(0);
+                                                            if off < vlen {
+                                                                result.push_str(&chars[off..].iter().collect::<String>());
+                                                            }
+                                                        }
+                                                    } else {
+                                                        result.push_str(val);
+                                                    }
+                                                } else {
+                                                    // Index out of bounds — empty string
+                                                }
+                                            }
+                                        } else {
+                                            // Non-numeric index — treat as empty
+                                        }
+                                        if !after.is_empty() {
+                                            result.push_str(after);
+                                        }
+                                    } else {
+                                        // No closing bracket — literal
+                                        result.push_str(&content);
+                                    }
+                                } else if rest.is_empty() {
                                     let val = get_var_value(var_name, ctx);
                                     result.push_str(&val);
                                 } else if rest.starts_with(":-") {
@@ -717,54 +813,153 @@ impl Executor {
                                     } else {
                                         result.push_str(&val);
                                     }
-                                } else if rest.starts_with("%%") {
-                                    let pattern = &rest[2..];
+                                } else if rest.starts_with(':') {
+                                    // ${var:offset:length} substring expansion
+                                    let substr = &rest[1..];
                                     let val = get_var_value(var_name, ctx);
-                                    let expanded =
-                                        shell_pattern_remove_suffix(&val, pattern, true);
-                                    result.push_str(&expanded);
-                                } else if rest.starts_with('%') {
-                                    let pattern = &rest[1..];
-                                    let val = get_var_value(var_name, ctx);
-                                    let expanded =
-                                        shell_pattern_remove_suffix(&val, pattern, false);
-                                    result.push_str(&expanded);
-                                } else if rest.starts_with("##") {
-                                    let pattern = &rest[2..];
-                                    let val = get_var_value(var_name, ctx);
-                                    let expanded =
-                                        shell_pattern_remove_prefix(&val, pattern, true);
-                                    result.push_str(&expanded);
-                                } else if rest.starts_with('#') {
-                                    let pattern = &rest[1..];
-                                    let val = get_var_value(var_name, ctx);
-                                    let expanded =
-                                        shell_pattern_remove_prefix(&val, pattern, false);
-                                    result.push_str(&expanded);
-                                } else if rest.starts_with("//") {
-                                    let slash_content = &rest[2..];
-                                    if let Some(slash_pos) = slash_content.find('/') {
-                                        let pattern = &slash_content[..slash_pos];
-                                        let replacement = &slash_content[slash_pos + 1..];
-                                        let val = get_var_value(var_name, ctx);
-                                        let expanded =
-                                            shell_str_replace_all(&val, pattern, replacement);
-                                        result.push_str(&expanded);
+                                    let chars: Vec<char> = val.chars().collect();
+                                    let len = chars.len();
+                                    if let Some(colon_pos) = substr.find(':') {
+                                        let offset_str = &substr[..colon_pos];
+                                        let length_str = &substr[colon_pos + 1..];
+                                        let offset: usize = if offset_str.is_empty() {
+                                            0
+                                        } else if offset_str.starts_with('-') {
+                                            let n: usize = offset_str[1..].parse().unwrap_or(0);
+                                            len.saturating_sub(n)
+                                        } else {
+                                            offset_str.parse().unwrap_or(0)
+                                        };
+                                        let length: usize = if length_str.is_empty() {
+                                            len
+                                        } else {
+                                            length_str.parse().unwrap_or(0)
+                                        };
+                                        let end = (offset + length).min(len);
+                                        if offset < len {
+                                            let sub: String = chars[offset..end].iter().collect();
+                                            result.push_str(&sub);
+                                        }
                                     } else {
-                                        let val = get_var_value(var_name, ctx);
+                                        // ${var:offset} — substring from offset to end
+                                        let offset: usize = if substr.starts_with('-') {
+                                            let n: usize = substr[1..].parse().unwrap_or(0);
+                                            len.saturating_sub(n)
+                                        } else {
+                                            substr.parse().unwrap_or(0)
+                                        };
+                                        if offset < len {
+                                            let sub: String = chars[offset..].iter().collect();
+                                            result.push_str(&sub);
+                                        }
+                                    }
+                                } else if rest == "^" {
+                                    // ${var^} — first char uppercase
+                                    let val = get_var_value(var_name, ctx);
+                                    let mut chars = val.chars();
+                                    if let Some(first) = chars.next() {
+                                        let rest_str: String = chars.collect();
+                                        result.push_str(&first.to_uppercase().to_string());
+                                        result.push_str(&rest_str);
+                                    }
+                                } else if rest == "^^" {
+                                    // ${var^^} — all uppercase
+                                    let val = get_var_value(var_name, ctx);
+                                    result.push_str(&val.to_uppercase());
+                                } else if rest == "," {
+                                    // ${var,} — first char lowercase
+                                    let val = get_var_value(var_name, ctx);
+                                    let mut chars = val.chars();
+                                    if let Some(first) = chars.next() {
+                                        let rest_str: String = chars.collect();
+                                        result.push_str(&first.to_lowercase().to_string());
+                                        result.push_str(&rest_str);
+                                    }
+                                } else if rest == ",," {
+                                    // ${var,,} — all lowercase
+                                    let val = get_var_value(var_name, ctx);
+                                    result.push_str(&val.to_lowercase());
+                                } else if rest.starts_with("@Q") {
+                                    // ${var@Q} — quoted escape
+                                    let val = get_var_value(var_name, ctx);
+                                    let escaped = val.replace('\'', "'\\''");
+                                    result.push_str(&format!("'{escaped}'"));
+                                } else if rest.starts_with("@") && rest.len() > 1 {
+                                    // ${var@} — attribute flags (simplified: return type info)
+                                    result.push_str("a"); // just indicate it's a scalar
+                                } else if rest.starts_with("!") && rest.len() > 1 {
+                                    // ${!var} — indirect expansion / variable name matching prefix
+                                    let prefix = &rest[1..];
+                                    // If prefix ends with @, it's ${!prefix@} — list matching vars
+                                    if prefix.ends_with('@') {
+                                        let pat = &prefix[..prefix.len() - 1];
+                                        let names: Vec<&str> = ctx
+                                            .variables
+                                            .keys()
+                                            .filter(|k| k.starts_with(pat))
+                                            .map(|k| k.as_str())
+                                            .collect();
+                                        result.push_str(&names.join(" "));
+                                    } else {
+                                        // ${!var} — indirect: expand the value of var as a variable name
+                                        let indirect_val = get_var_value(var_name, ctx);
+                                        let final_val = get_var_value(&indirect_val, ctx);
+                                        result.push_str(&final_val);
+                                    }
+                                } else if rest.starts_with("%%") {
+                                    // ${var%%pattern} — remove longest suffix matching pattern
+                                    let pattern = &rest[2..];
+                                    let val = get_var_value(var_name, ctx);
+                                    let re = glob_to_regex(pattern);
+                                    let mut best_cut = val.len();
+                                    for i in 0..val.len() {
+                                        if re.is_match(&val[i..]) {
+                                            best_cut = i;
+                                        }
+                                    }
+                                    result.push_str(&val[..best_cut]);
+                                } else if rest.starts_with('%') {
+                                    // ${var%pattern} — remove shortest suffix matching pattern
+                                    let pattern = &rest[1..];
+                                    let val = get_var_value(var_name, ctx);
+                                    let re = glob_to_regex(pattern);
+                                    let mut found = false;
+                                    for i in 0..val.len() {
+                                        if re.is_match(&val[i..]) {
+                                            result.push_str(&val[..i]);
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if !found {
                                         result.push_str(&val);
                                     }
-                                } else if rest.starts_with('/') {
-                                    let slash_content = &rest[1..];
-                                    if let Some(slash_pos) = slash_content.find('/') {
-                                        let pattern = &slash_content[..slash_pos];
-                                        let replacement = &slash_content[slash_pos + 1..];
-                                        let val = get_var_value(var_name, ctx);
-                                        let expanded =
-                                            shell_str_replace_first(&val, pattern, replacement);
-                                        result.push_str(&expanded);
-                                    } else {
-                                        let val = get_var_value(var_name, ctx);
+                                } else if rest.starts_with("##") {
+                                    // ${var##pattern} — remove longest prefix matching pattern
+                                    let pattern = &rest[2..];
+                                    let val = get_var_value(var_name, ctx);
+                                    let re = glob_to_regex(pattern);
+                                    let mut best_cut = 0;
+                                    for i in 1..=val.len() {
+                                        if re.is_match(&val[..i]) {
+                                            best_cut = i;
+                                        }
+                                    }
+                                    result.push_str(&val[best_cut..]);
+                                } else if rest.starts_with('#') {
+                                    // ${var#pattern} — remove shortest prefix matching pattern
+                                    let pattern = &rest[1..];
+                                    let val = get_var_value(var_name, ctx);
+                                    let re = glob_to_regex(pattern);
+                                    let mut found = false;
+                                    for i in 1..=val.len() {
+                                        if re.is_match(&val[..i]) {
+                                            result.push_str(&val[i..]);
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if !found {
                                         result.push_str(&val);
                                     }
                                 } else {
@@ -1253,6 +1448,49 @@ impl Executor {
         expanded_cmd: &SimpleCommand,
         ctx: &mut ExecContext,
     ) -> Result<ExecOutcome, ShellError> {
+        // Detect array assignment: arr=(a b c) or arr=()
+        if expanded_cmd.name.contains("=(") {
+            let eq_pos = expanded_cmd.name.find("=(").unwrap();
+            let arr_name = &expanded_cmd.name[..eq_pos];
+            // Reconstruct the content: name=(first_arg rest_args...) with closing ) stripped
+            let mut content = String::new();
+            // The first arg might start after the =( — e.g. name=(a
+            if let Some(paren_pos) = expanded_cmd.name.find("=(") {
+                let after_paren = &expanded_cmd.name[paren_pos + 2..];
+                if !after_paren.is_empty() {
+                    content.push_str(after_paren);
+                }
+            }
+            for arg in &expanded_cmd.args {
+                if arg == ")" {
+                    // Closing paren — skip
+                } else if arg.ends_with(')') {
+                    let trimmed = &arg[..arg.len() - 1];
+                    if !trimmed.is_empty() {
+                        if !content.is_empty() {
+                            content.push(' ');
+                        }
+                        content.push_str(trimmed);
+                    }
+                } else {
+                    if !content.is_empty() {
+                        content.push(' ');
+                    }
+                    content.push_str(arg);
+                }
+            }
+            let elements: Vec<String> = if content.is_empty() {
+                Vec::new()
+            } else {
+                word_split(&content)
+                    .into_iter()
+                    .map(|s| Self::expand_variables(&s, ctx))
+                    .collect()
+            };
+            ctx.arrays.insert(arr_name.to_string(), elements);
+            return Ok(ExecOutcome::Success(0));
+        }
+
         match expanded_cmd.name.as_str() {
             "cd" => return Self::builtin_cd(&expanded_cmd.args, ctx),
             "exit" => {
@@ -1481,23 +1719,59 @@ impl Executor {
                     return Ok(ExecOutcome::Success(1));
                 }
                 let mut sig = 15; // SIGTERM default
-                let pid_str = if expanded_cmd.args[0].starts_with('-') {
-                    sig = expanded_cmd.args[0]
-                        .trim_start_matches('-')
-                        .parse::<i32>()
-                        .unwrap_or(15);
-                    expanded_cmd.args.get(1).map(String::as_str).unwrap_or("0")
-                } else {
-                    expanded_cmd.args[0].as_str()
-                };
-                if let Ok(pid) = pid_str.parse::<i32>() {
-                    unsafe {
-                        libc::kill(pid, sig);
+                let mut pid_strs = Vec::new();
+                let mut i = 0;
+                while i < expanded_cmd.args.len() {
+                    let arg = &expanded_cmd.args[i];
+                    if arg.starts_with('-') && arg.len() > 1 {
+                        let sig_str = &arg[1..];
+                        // Try numeric signal
+                        if let Ok(s) = sig_str.parse::<i32>() {
+                            sig = s;
+                        } else {
+                            // Try signal name
+                            sig = match sig_str.to_uppercase().as_str() {
+                                "HUP" | "SIGHUP" => 1,
+                                "INT" | "SIGINT" => 2,
+                                "QUIT" | "SIGQUIT" => 3,
+                                "KILL" | "SIGKILL" => 9,
+                                "USR1" | "SIGUSR1" => 10,
+                                "USR2" | "SIGUSR2" => 12,
+                                "PIPE" | "SIGPIPE" => 13,
+                                "ALRM" | "SIGALRM" => 14,
+                                "TERM" | "SIGTERM" => 15,
+                                "CHLD" | "SIGCHLD" => 17,
+                                "CONT" | "SIGCONT" => 18,
+                                "STOP" | "SIGSTOP" => 19,
+                                "TSTP" | "SIGTSTP" => 20,
+                                "TTIN" | "SIGTTIN" => 21,
+                                "TTOU" | "SIGTTOU" => 22,
+                                _ => {
+                                    eprintln!("kill: unknown signal '{sig_str}'");
+                                    return Ok(ExecOutcome::Success(1));
+                                }
+                            };
+                        }
+                    } else {
+                        pid_strs.push(arg.as_str());
                     }
-                    return Ok(ExecOutcome::Success(0));
+                    i += 1;
                 }
-                eprintln!("kill: invalid pid '{pid_str}'");
-                return Ok(ExecOutcome::Success(1));
+                if pid_strs.is_empty() {
+                    eprintln!("kill: usage: kill [-signal] pid");
+                    return Ok(ExecOutcome::Success(1));
+                }
+                for pid_str in &pid_strs {
+                    if let Ok(pid) = pid_str.parse::<i32>() {
+                        unsafe {
+                            libc::kill(pid, sig);
+                        }
+                    } else {
+                        eprintln!("kill: invalid pid '{pid_str}'");
+                        return Ok(ExecOutcome::Success(1));
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
             }
             "set" => {
                 // set: display variables; set -e/-u/-x etc (mostly no-ops for compat)
@@ -1529,63 +1803,153 @@ impl Executor {
             }
             "read" => {
                 let mut prompt = String::new();
-                let mut silent = false;
+                let mut _silent = false;
                 let mut raw = false;
+                let mut array_mode = false;
+                let mut timeout_secs: Option<u64> = None;
+                let mut delimiter = '\n';
+                let mut var_names = Vec::new();
                 let mut args_iter = expanded_cmd.args.iter();
                 while let Some(arg) = args_iter.next() {
                     if arg == "-p" {
                         prompt = args_iter.next().cloned().unwrap_or_default();
                     } else if arg == "-s" {
-                        silent = true;
+                        _silent = true;
                     } else if arg == "-r" {
                         raw = true;
+                    } else if arg == "-a" {
+                        array_mode = true;
+                    } else if arg == "-t" {
+                        timeout_secs = args_iter.next().and_then(|s| s.parse().ok());
+                    } else if arg == "-d" {
+                        if let Some(d) = args_iter.next() {
+                            delimiter = d.chars().next().unwrap_or('\n');
+                        }
                     } else if arg.starts_with('-') && arg.len() > 1 && !arg.starts_with("--") {
-                        // Combine flags like -sr, -rp
+                        // Combine flags like -sr, -rp, -at
                         for ch in arg[1..].chars() {
                             match ch {
                                 'p' => { prompt = args_iter.next().cloned().unwrap_or_default(); }
-                                's' => { silent = true; }
+                                's' => { _silent = true; }
                                 'r' => { raw = true; }
+                                'a' => { array_mode = true; }
+                                't' => { timeout_secs = args_iter.next().and_then(|s| s.parse().ok()); }
+                                'd' => {
+                                    if let Some(d) = args_iter.next() {
+                                        delimiter = d.chars().next().unwrap_or('\n');
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     } else {
-                        // First non-flag arg is the variable name
-                        if !prompt.is_empty() || !arg.starts_with('-') {
-                            let var_name = arg;
-                            let mut input = String::new();
-                            if !prompt.is_empty() {
-                                use std::io::Write;
-                                let _ = print!("{prompt}");
-                                let _ = std::io::stdout().flush();
-                            }
-                            if silent {
-                                // Read without echo (for passwords)
-                                let _ = std::io::stdin().read_line(&mut input);
-                            } else {
-                                let _ = std::io::stdin().read_line(&mut input);
-                            }
-                            let value = if raw {
-                                input.trim_end_matches('\n').trim_end_matches('\r').to_string()
-                            } else {
-                                input.trim_end_matches('\n').trim_end_matches('\r')
-                                    .replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
-                            };
-                            ctx.variables.insert(var_name.to_string(), value);
-                            return Ok(ExecOutcome::Success(0));
-                        }
+                        var_names.push(arg.clone());
                     }
                 }
-                // Default: no args, read into REPLY
                 let mut input = String::new();
                 if !prompt.is_empty() {
                     use std::io::Write;
                     let _ = print!("{prompt}");
                     let _ = std::io::stdout().flush();
                 }
-                let _ = std::io::stdin().read_line(&mut input);
-                let input = input.trim_end_matches('\n').trim_end_matches('\r').to_string();
-                ctx.variables.insert("REPLY".to_string(), input);
+                if let Some(secs) = timeout_secs {
+                    use std::io::Read;
+                    use std::time::Duration;
+                    let stdin = std::io::stdin();
+                    let mut handle = stdin.lock();
+                    let mut buf = [0u8; 1];
+                    let start = std::time::Instant::now();
+                    loop {
+                        if start.elapsed() >= Duration::from_secs(secs) {
+                            break;
+                        }
+                        // Non-blocking read using poll
+                        use std::io::IsTerminal;
+                        if stdin.is_terminal() {
+                            // Use select() for non-blocking check
+                            #[allow(unsafe_code)]
+                            unsafe {
+                                let mut fds: libc::fd_set = std::mem::zeroed();
+                                libc::FD_ZERO(&mut fds);
+                                libc::FD_SET(libc::STDIN_FILENO, &mut fds);
+                                let mut tv = libc::timeval {
+                                    tv_sec: 0,
+                                    tv_usec: 100_000, // 100ms check interval
+                                };
+                                let ready = libc::select(1, &mut fds, std::ptr::null_mut(), std::ptr::null_mut(), &mut tv);
+                                if ready > 0 {
+                                    match handle.read(&mut buf) {
+                                        Ok(0) => break,
+                                        Ok(_) => {
+                                            let ch = buf[0] as char;
+                                            if ch == delimiter || ch == '\n' {
+                                                break;
+                                            }
+                                            input.push(ch);
+                                        }
+                                        Err(_) => break,
+                                    }
+                                }
+                            }
+                        } else {
+                            match handle.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    let ch = buf[0] as char;
+                                    if ch == delimiter || ch == '\n' {
+                                        break;
+                                    }
+                                    input.push(ch);
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                } else if delimiter != '\n' {
+                    use std::io::Read;
+                    let stdin = std::io::stdin();
+                    let mut handle = stdin.lock();
+                    let mut buf = [0u8; 1];
+                    loop {
+                        match handle.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                let ch = buf[0] as char;
+                                if ch == delimiter {
+                                    break;
+                                }
+                                input.push(ch);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                } else {
+                    let _ = std::io::stdin().read_line(&mut input);
+                }
+                let value = if raw {
+                    input.trim_end_matches('\n').trim_end_matches('\r').to_string()
+                } else {
+                    input.trim_end_matches('\n').trim_end_matches('\r')
+                        .replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+                };
+                if array_mode {
+                    // Store each word as a separate array element
+                    let parts: Vec<String> = value.split_whitespace().map(String::from).collect();
+                    let var_name = var_names.first().cloned().unwrap_or_else(|| "MAPFILE".to_string());
+                    for (i, part) in parts.iter().enumerate() {
+                        ctx.variables.insert(format!("{var_name}[{i}]"), part.clone());
+                    }
+                    ctx.variables.insert(format!("{var_name}"), parts.len().to_string());
+                } else if var_names.is_empty() {
+                    ctx.variables.insert("REPLY".to_string(), value);
+                } else {
+                    // If multiple var names, split words across them
+                    let words: Vec<&str> = value.split_whitespace().collect();
+                    for (i, var_name) in var_names.iter().enumerate() {
+                        let val = words.get(i).unwrap_or(&"");
+                        ctx.variables.insert(var_name.clone(), val.to_string());
+                    }
+                }
                 return Ok(ExecOutcome::Success(0));
             }
             "compgen" => {
@@ -1652,6 +2016,41 @@ impl Executor {
                 }
                 return Ok(ExecOutcome::Success(0));
             }
+            "let" => {
+                let mut exit_code = 0;
+                for arg in &expanded_cmd.args {
+                    // Handle VAR=EXPR or just EXPR
+                    if let Some(eq_pos) = arg.find('=') {
+                        let var_name = &arg[..eq_pos];
+                        let expr = &arg[eq_pos + 1..];
+                        match eval_arithmetic(expr, ctx) {
+                            Ok(val) => {
+                                ctx.variables.insert(var_name.to_string(), val.to_string());
+                                if val == 0 {
+                                    exit_code = 1;
+                                }
+                            }
+                            Err(_) => {
+                                eprintln!("let: {arg}: syntax error");
+                                exit_code = 1;
+                            }
+                        }
+                    } else {
+                        match eval_arithmetic(arg, ctx) {
+                            Ok(val) => {
+                                if val == 0 {
+                                    exit_code = 1;
+                                }
+                            }
+                            Err(_) => {
+                                eprintln!("let: {arg}: syntax error");
+                                exit_code = 1;
+                            }
+                        }
+                    }
+                }
+                return Ok(ExecOutcome::Success(exit_code));
+            }
             "basename" => {
                 let args: Vec<&String> = expanded_cmd.args.iter().filter(|a| !a.starts_with('-')).collect();
                 if args.is_empty() {
@@ -1668,6 +2067,104 @@ impl Executor {
                     }
                 } else {
                     println!("{name}");
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            "hash" => {
+                if expanded_cmd.args.is_empty() {
+                    return Ok(ExecOutcome::Success(0));
+                }
+                for arg in &expanded_cmd.args {
+                    if arg == "-r" {
+                        continue;
+                    }
+                    if let Some(path) = which_path(arg) {
+                        println!("{}={}", arg, path.display());
+                    } else {
+                        eprintln!("hash: {arg}: not found");
+                        return Ok(ExecOutcome::Success(1));
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            "builtin" => {
+                if expanded_cmd.args.is_empty() {
+                    eprintln!("builtin: missing operand");
+                    return Ok(ExecOutcome::Success(1));
+                }
+                let cmd_name = &expanded_cmd.args[0];
+                let cmd_args = &expanded_cmd.args[1..];
+                if aster_builtins::is_builtin(cmd_name) {
+                    let mut env = aster_shell_core::ShellEnvironment::from_process();
+                    if let Some(result) = aster_builtins::execute(
+                        cmd_name,
+                        cmd_args,
+                        &mut env,
+                        &mut ctx.aliases,
+                    )? {
+                        return Ok(ExecOutcome::Success(result));
+                    }
+                }
+                eprintln!("builtin: {cmd_name}: not a builtin");
+                return Ok(ExecOutcome::Success(1));
+            }
+            "enable" => {
+                if expanded_cmd.args.is_empty() {
+                    for (name, _) in aster_builtins::builtin_list() {
+                        println!("{name}");
+                    }
+                    return Ok(ExecOutcome::Success(0));
+                }
+                if expanded_cmd.args.first().map(String::as_str) == Some("-n") {
+                    return Ok(ExecOutcome::Success(0));
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            "shopt" => {
+                // shopt stub: accepts -s/-u flag and option names, always succeeds
+                return Ok(ExecOutcome::Success(0));
+            }
+            "umask" => {
+                if expanded_cmd.args.is_empty() {
+                    // Print current umask
+                    #[allow(unsafe_code)]
+                    let mask = unsafe { libc::umask(0o022) };
+                    #[allow(unsafe_code)]
+                    unsafe { libc::umask(mask); }
+                    println!("{:04o}", mask);
+                    return Ok(ExecOutcome::Success(0));
+                }
+                if let Some(mode_str) = expanded_cmd.args.first() {
+                    if let Ok(mode) = u32::from_str_radix(mode_str, 8) {
+                        #[allow(unsafe_code)]
+                        unsafe { libc::umask(mode); }
+                        return Ok(ExecOutcome::Success(0));
+                    }
+                }
+                eprintln!("umask: invalid mode");
+                return Ok(ExecOutcome::Success(1));
+            }
+            "pushd" | "popd" => {
+                // Stack-based directory navigation stub
+                return Ok(ExecOutcome::Success(0));
+            }
+            "dirs" => {
+                return Ok(ExecOutcome::Success(0));
+            }
+            "export" => {
+                for arg in &expanded_cmd.args {
+                    if let Some((name, value)) = arg.split_once('=') {
+                        let expanded_value = Self::expand_variables(value, ctx);
+                        ctx.variables.insert(name.to_string(), expanded_value.clone());
+                        #[allow(unsafe_code)]
+                        unsafe { std::env::set_var(name, expanded_value.as_str()); }
+                    } else {
+                        // export VAR — mark existing var as exported
+                        if let Some(val) = ctx.variables.get(arg).cloned() {
+                            #[allow(unsafe_code)]
+                            unsafe { std::env::set_var(arg.as_str(), val.as_str()); }
+                        }
+                    }
                 }
                 return Ok(ExecOutcome::Success(0));
             }
@@ -1713,15 +2210,61 @@ impl Executor {
 
         // Handle declare/local/readonly
         if expanded_cmd.name == "declare" || expanded_cmd.name == "typeset" {
+            // declare -p VAR: print declaration
+            if expanded_cmd.args.first().map(String::as_str) == Some("-p") {
+                for arg in &expanded_cmd.args[1..] {
+                    if let Some(val) = ctx.variables.get(arg) {
+                        println!("declare -- {arg}=\"{val}\"");
+                    } else if let Some(arr) = ctx.arrays.get(arg) {
+                        let joined: Vec<String> = arr.iter()
+                            .enumerate()
+                            .map(|(i, v)| format!("[{i}]=\"{v}\""))
+                            .collect();
+                        println!("declare -a {arg}=({})", joined.join(" "));
+                    } else {
+                        eprintln!("declare: {arg}: not found");
+                        return Ok(ExecOutcome::Success(1));
+                    }
+                }
+                return Ok(ExecOutcome::Success(0));
+            }
+            // declare with flags: parse flags and assignments
+            let mut flags = String::new();
+            let mut assignments = Vec::new();
             for arg in &expanded_cmd.args {
-                if let Some((name, value)) = arg.split_once('=') {
+                if arg.starts_with('-') && arg.len() > 1 {
+                    flags.push_str(&arg[1..]);
+                } else if let Some((name, value)) = arg.split_once('=') {
                     let expanded_value = Self::expand_variables(value, ctx);
-                    ctx.variables.insert(name.to_string(), expanded_value);
+                    assignments.push((name.to_string(), expanded_value));
                 } else {
                     // declare VAR (no value): just export
                     if let Ok(value) = std::env::var(arg) {
                         ctx.variables.insert(arg.clone(), value);
                     }
+                }
+            }
+            // Handle array assignment: declare -a ARR=(a b c)
+            if flags.contains('a') {
+                for arg in expanded_cmd.args.iter() {
+                    if let Some(eq_pos) = arg.find("=(") {
+                        let name = arg[..eq_pos].trim_start_matches('-').trim().to_string();
+                        let rest = &arg[eq_pos + 2..]; // skip "=("
+                        let content = rest.trim_end_matches(')');
+                        let elements: Vec<String> = word_split(content)
+                            .into_iter()
+                            .map(|s| Self::expand_variables(&s, ctx))
+                            .collect();
+                        ctx.arrays.insert(name, elements);
+                        return Ok(ExecOutcome::Success(0));
+                    }
+                }
+            }
+            for (name, value) in assignments {
+                ctx.variables.insert(name.clone(), value.clone());
+                if flags.contains('x') {
+                    #[allow(unsafe_code)]
+                    unsafe { std::env::set_var(name.as_str(), value.as_str()); }
                 }
             }
             return Ok(ExecOutcome::Success(0));
@@ -1752,6 +2295,7 @@ impl Executor {
         if expanded_cmd.name == "unset" {
             for arg in &expanded_cmd.args {
                 ctx.variables.remove(arg);
+                ctx.arrays.remove(arg);
                 #[allow(unsafe_code)]
                 unsafe { std::env::remove_var(arg.as_str()); }
             }
@@ -1907,6 +2451,9 @@ impl Executor {
                 "SIGTTOU" | "TTOU" | "22" => Some(22),
                 "SIGWINCH" | "WINCH" | "28" => Some(28),
                 "EXIT" | "0" => Some(0),
+                "ERR" => Some(-1),
+                "DEBUG" => Some(-2),
+                "RETURN" => Some(-3),
                 _ => None,
             }
         }
@@ -1921,6 +2468,7 @@ impl Executor {
                         10 => "SIGUSR1", 12 => "SIGUSR2", 13 => "SIGPIPE", 14 => "SIGALRM",
                         15 => "SIGTERM", 17 => "SIGCHLD", 18 => "SIGCONT", 19 => "SIGSTOP",
                         20 => "SIGTSTP", 21 => "SIGTTIN", 22 => "SIGTTOU", 28 => "SIGWINCH",
+                        -1 => "ERR", -2 => "DEBUG", -3 => "RETURN",
                         _ => "UNKNOWN",
                     };
                     println!("trap -- '{cmd}' {name}");
@@ -2929,6 +3477,81 @@ fn expand_arith_vars(input: &str, ctx: &ExecContext) -> String {
 // Brace expansion
 // ---------------------------------------------------------------------------
 
+/// Splits a string into words on whitespace boundaries, respecting quotes.
+pub fn word_split(input: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            chars.next();
+        } else if c == '\'' {
+            chars.next();
+            while let Some(&ch) = chars.peek() {
+                if ch == '\'' {
+                    chars.next();
+                    break;
+                }
+                current.push(ch);
+                chars.next();
+            }
+        } else if c == '"' {
+            chars.next();
+            while let Some(&ch) = chars.peek() {
+                if ch == '"' {
+                    chars.next();
+                    break;
+                }
+                if ch == '\\' {
+                    chars.next();
+                    if let Some(&escaped) = chars.peek() {
+                        current.push(escaped);
+                        chars.next();
+                    }
+                } else {
+                    current.push(ch);
+                    chars.next();
+                }
+            }
+        } else if c == '\\' {
+            chars.next();
+            if let Some(&escaped) = chars.peek() {
+                current.push(escaped);
+                chars.next();
+            }
+        } else {
+            current.push(c);
+            chars.next();
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+fn glob_to_regex(pattern: &str) -> regex::Regex {
+    let mut re_str = String::from("^");
+    for c in pattern.chars() {
+        match c {
+            '*' => re_str.push_str(".*"),
+            '?' => re_str.push('.'),
+            '[' => re_str.push('['),
+            ']' => re_str.push(']'),
+            '.' | '+' | '(' | ')' | '{' | '}' | '^' | '$' | '|' | '\\' => {
+                re_str.push('\\');
+                re_str.push(c);
+            }
+            _ => re_str.push(c),
+        }
+    }
+    re_str.push('$');
+    regex::Regex::new(&re_str).unwrap_or_else(|_| regex::Regex::new("^$").unwrap())
+}
+
 /// Expands brace patterns in a list of arguments.
 ///
 /// Supports `{a,b,c}`, `{1..5}`, `{a..z}`, `{01..10}` (with padding),
@@ -3201,76 +3824,6 @@ fn get_var_value(var_name: &str, ctx: &ExecContext) -> String {
     } else {
         String::new()
     }
-}
-
-/// Removes the shortest/longest suffix matching a glob pattern.
-fn shell_pattern_remove_suffix(val: &str, pattern: &str, longest: bool) -> String {
-    if pattern.is_empty() {
-        return val.to_string();
-    }
-    let val_chars: Vec<char> = val.chars().collect();
-    let pat_chars: Vec<char> = pattern.chars().collect();
-
-    if longest {
-        for start in (0..=val_chars.len()).rev() {
-            let suffix = &val_chars[start..];
-            if glob_match_inner(&pat_chars, suffix) {
-                return val_chars[..start].iter().collect();
-            }
-        }
-    } else {
-        for start in 0..=val_chars.len() {
-            let suffix = &val_chars[start..];
-            if glob_match_inner(&pat_chars, suffix) {
-                return val_chars[..start].iter().collect();
-            }
-        }
-    }
-    val.to_string()
-}
-
-/// Removes the shortest/longest prefix matching a glob pattern.
-fn shell_pattern_remove_prefix(val: &str, pattern: &str, longest: bool) -> String {
-    if pattern.is_empty() {
-        return val.to_string();
-    }
-    let val_chars: Vec<char> = val.chars().collect();
-    let pat_chars: Vec<char> = pattern.chars().collect();
-
-    if longest {
-        for end in (0..=val_chars.len()).rev() {
-            let prefix = &val_chars[..end];
-            if glob_match_inner(&pat_chars, prefix) {
-                return val_chars[end..].iter().collect();
-            }
-        }
-    } else {
-        for end in 0..=val_chars.len() {
-            let prefix = &val_chars[..end];
-            if glob_match_inner(&pat_chars, prefix) {
-                return val_chars[end..].iter().collect();
-            }
-        }
-    }
-    val.to_string()
-}
-
-/// Replaces the first literal occurrence of `pattern` with `replacement`.
-fn shell_str_replace_first(val: &str, pattern: &str, replacement: &str) -> String {
-    if let Some(pos) = val.find(pattern) {
-        let mut result = String::with_capacity(val.len() - pattern.len() + replacement.len());
-        result.push_str(&val[..pos]);
-        result.push_str(replacement);
-        result.push_str(&val[pos + pattern.len()..]);
-        result
-    } else {
-        val.to_string()
-    }
-}
-
-/// Replaces all literal occurrences of `pattern` with `replacement`.
-fn shell_str_replace_all(val: &str, pattern: &str, replacement: &str) -> String {
-    val.replace(pattern, replacement)
 }
 
 // ===========================================================================

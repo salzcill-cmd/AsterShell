@@ -61,7 +61,7 @@ Or build from source:
 ```bash
 git clone https://github.com/salzcill-cmd/AsterShell.git
 cd AsterShell
-cargo install --path .
+cargo install --path ./aster
 ```
 
 ## Features
