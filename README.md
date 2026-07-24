@@ -52,18 +52,16 @@ AsterShell is a command-line shell written in Rust. It runs your existing bash s
 
 ## Install
 
-**Download pre-built binary** (no Rust needed):
-
-Grab the latest binary for your platform from [GitHub Releases](https://github.com/salzcill-cmd/AsterShell/releases):
+**Quick install** (download pre-built binary, no Rust needed):
 
 ```bash
-# Linux (x86_64)
-curl -L https://github.com/salzcill-cmd/AsterShell/releases/latest/download/aster-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv aster /usr/local/bin/
+curl -sSL https://raw.githubusercontent.com/salzcill-cmd/AsterShell/main/scripts/install.sh | bash
+```
 
-# macOS (Apple Silicon)
-curl -L https://github.com/salzcill-cmd/AsterShell/releases/latest/download/aster-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv aster /usr/local/bin/
+Or **set as default shell**:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/salzcill-cmd/AsterShell/main/scripts/install.sh | bash -s -- --set-default
 ```
 
 Or **build from source** (requires [Rust 1.85+](https://rustup.rs)):
