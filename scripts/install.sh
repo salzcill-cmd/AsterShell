@@ -176,11 +176,26 @@ set_as_default() {
     info "Changing default shell to AsterShell..."
     if chsh -s "$aster_path"; then
         ok "Default shell changed to AsterShell"
-        warn "Open a new terminal to start using AsterShell."
     else
         err "Failed to change shell. Try manually:"
         echo "  chsh -s $aster_path"
+        return 1
     fi
+
+    # Handle kitty terminal — it reads its own config, not /etc/passwd
+    if command -v kitty &>/dev/null || [[ -d "$HOME/.config/kitty" ]]; then
+        local kitty_conf="$HOME/.config/kitty/kitty.conf"
+        mkdir -p "$HOME/.config/kitty"
+        if [[ -f "$kitty_conf" ]] && grep -q '^shell ' "$kitty_conf"; then
+            # Replace existing shell line
+            sed -i "s|^shell .*|shell $aster_path|" "$kitty_conf"
+        else
+            echo "shell $aster_path" >> "$kitty_conf"
+        fi
+        ok "Updated kitty config: $kitty_conf"
+    fi
+
+    warn "Quit ALL terminal windows (not just new tab), then reopen."
 }
 
 print_usage() {
