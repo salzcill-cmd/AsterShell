@@ -151,18 +151,36 @@ set_as_default() {
         return 0
     fi
 
+    # Try to copy to /usr/local/bin first (preferred)
+    if [[ "$aster_path" != "$INSTALL_DIR/$ASTER_BIN" ]]; then
+        if sudo cp "$aster_path" "$INSTALL_DIR/$ASTER_BIN" 2>/dev/null; then
+            sudo chmod +x "$INSTALL_DIR/$ASTER_BIN"
+            aster_path="$INSTALL_DIR/$ASTER_BIN"
+            ok "Copied to $INSTALL_DIR/$ASTER_BIN"
+        fi
+    fi
+
     # Add to /etc/shells if not present
     if ! grep -qx "$aster_path" /etc/shells 2>/dev/null; then
         info "Adding $aster_path to /etc/shells..."
-        echo "$aster_path" | sudo tee -a /etc/shells >/dev/null
-        ok "Added to /etc/shells"
+        if echo "$aster_path" | sudo tee -a /etc/shells >/dev/null 2>&1; then
+            ok "Added to /etc/shells"
+        else
+            warn "Could not add to /etc/shells (sudo required)."
+            warn "Try manually: echo '$aster_path' | sudo tee -a /etc/shells"
+            return 1
+        fi
     fi
 
     # Change default shell
     info "Changing default shell to AsterShell..."
-    chsh -s "$aster_path"
-    ok "Default shell changed to AsterShell"
-    warn "Run 'source ~/.bashrc' or open a new terminal to start using AsterShell."
+    if chsh -s "$aster_path"; then
+        ok "Default shell changed to AsterShell"
+        warn "Open a new terminal to start using AsterShell."
+    else
+        err "Failed to change shell. Try manually:"
+        echo "  chsh -s $aster_path"
+    fi
 }
 
 print_usage() {
