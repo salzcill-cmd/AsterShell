@@ -455,12 +455,21 @@ fn unset(args: &[String], env: &mut ShellEnvironment) -> Result<i32, ExecError> 
     Ok(0)
 }
 
+static DIR_STACK: OnceLock<std::sync::Mutex<Vec<PathBuf>>> = OnceLock::new();
+
 fn dir_stack() -> &'static std::sync::Mutex<Vec<PathBuf>> {
-    static STACK: OnceLock<std::sync::Mutex<Vec<PathBuf>>> = OnceLock::new();
-    STACK.get_or_init(|| {
+    DIR_STACK.get_or_init(|| {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         std::sync::Mutex::new(vec![cwd])
     })
+}
+
+/// Pre-initialize the directory stack with the given path.
+///
+/// Must be called **before** any `pushd`/`popd`/`cd` that changes the working
+/// directory; otherwise the lazy `OnceLock` captures the wrong cwd.
+pub fn init_dir_stack(cwd: PathBuf) {
+    DIR_STACK.get_or_init(|| std::sync::Mutex::new(vec![cwd]));
 }
 
 fn pushd(args: &[String]) -> Result<i32, ExecError> {

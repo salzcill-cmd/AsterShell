@@ -1060,15 +1060,24 @@ impl Executor {
             .collect();
         let expanded_args = aster_shell_core::glob::expand(&expanded_args);
 
+        let mut expanded_redirects = cmd.redirects.clone();
+        for r in &mut expanded_redirects {
+            r.target = Self::expand_process_substitution(&r.target, ctx);
+        }
+
         SimpleCommand {
             name: Self::expand_variables(&cmd.name, ctx),
             args: expanded_args,
-            redirects: cmd.redirects.clone(),
+            redirects: expanded_redirects,
             span: cmd.span,
         }
     }
 
     /// Expands process substitution `<(...)` and `>(...)` in a single argument.
+    ///
+    /// Uses `fork()`+`exec()` (not threads) so that only the child process has
+    /// redirected file descriptors. The old thread+`dup2` approach corrupted
+    /// the parent's stdout/stdin because FDs are process-wide.
     #[allow(unsafe_code)]
     fn expand_process_substitution(arg: &str, _ctx: &mut ExecContext) -> String {
         let mut result = String::with_capacity(arg.len());
@@ -1077,40 +1086,39 @@ impl Executor {
         while let Some(c) = chars.next() {
             if c == '<' && chars.peek() == Some(&'(') {
                 chars.next(); // consume '('
-                // Collect until matching ')'
                 let mut depth = 1;
                 let mut inner = String::new();
                 while let Some(cc) = chars.next() {
-                    if cc == '(' {
-                        depth += 1;
-                        inner.push(cc);
-                    } else if cc == ')' {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                        inner.push(cc);
-                    } else {
-                        inner.push(cc);
-                    }
+                    if cc == '(' { depth += 1; inner.push(cc); }
+                    else if cc == ')' { depth -= 1; if depth == 0 { break; } inner.push(cc); }
+                    else { inner.push(cc); }
                 }
-                // Create a pipe, run the command, feed stdout to the pipe
                 if let Ok((read_fd, write_fd)) = pipe() {
-                    // Spawn command writing to pipe
-                    let inner_cmd = inner.clone();
-                    let _ = std::thread::spawn(move || {
+                    let pid = unsafe { libc::fork() };
+                    if pid == 0 {
                         unsafe {
                             libc::dup2(write_fd, libc::STDOUT_FILENO);
                             libc::close(write_fd);
+                            libc::close(read_fd);
                         }
-                        let _ = std::process::Command::new("/bin/sh")
-                            .arg("-c")
-                            .arg(&inner_cmd)
-                            .status();
-                        unsafe { libc::close(libc::STDOUT_FILENO); }
-                    });
-                    unsafe { libc::close(write_fd); }
-                    result.push_str(&format!("/proc/self/fd/{read_fd}"));
+                        let c_cmd = std::ffi::CString::new("/bin/sh").unwrap();
+                        let c_arg0 = std::ffi::CString::new("sh").unwrap();
+                        let c_arg1 = std::ffi::CString::new("-c").unwrap();
+                        let c_arg2 = std::ffi::CString::new(inner.as_bytes()).unwrap();
+                        unsafe {
+                            libc::execvp(
+                                c_cmd.as_ptr(),
+                                [c_arg0.as_ptr(), c_arg1.as_ptr(), c_arg2.as_ptr(), std::ptr::null()].as_ptr(),
+                            );
+                            libc::_exit(127);
+                        }
+                    } else if pid > 0 {
+                        unsafe { libc::close(write_fd); }
+                        result.push_str(&format!("/proc/self/fd/{read_fd}"));
+                    } else {
+                        unsafe { libc::close(read_fd); libc::close(write_fd); }
+                        result.push_str(&format!("<({inner})"));
+                    }
                 } else {
                     result.push_str(&format!("<({inner})"));
                 }
@@ -1119,34 +1127,36 @@ impl Executor {
                 let mut depth = 1;
                 let mut inner = String::new();
                 while let Some(cc) = chars.next() {
-                    if cc == '(' {
-                        depth += 1;
-                        inner.push(cc);
-                    } else if cc == ')' {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                        inner.push(cc);
-                    } else {
-                        inner.push(cc);
-                    }
+                    if cc == '(' { depth += 1; inner.push(cc); }
+                    else if cc == ')' { depth -= 1; if depth == 0 { break; } inner.push(cc); }
+                    else { inner.push(cc); }
                 }
                 if let Ok((read_fd, write_fd)) = pipe() {
-                    let inner_cmd = inner.clone();
-                    let _ = std::thread::spawn(move || {
+                    let pid = unsafe { libc::fork() };
+                    if pid == 0 {
                         unsafe {
                             libc::dup2(read_fd, libc::STDIN_FILENO);
                             libc::close(read_fd);
+                            libc::close(write_fd);
                         }
-                        let _ = std::process::Command::new("/bin/sh")
-                            .arg("-c")
-                            .arg(&inner_cmd)
-                            .status();
-                        unsafe { libc::close(libc::STDIN_FILENO); }
-                    });
-                    unsafe { libc::close(read_fd); }
-                    result.push_str(&format!("/proc/self/fd/{write_fd}"));
+                        let c_cmd = std::ffi::CString::new("/bin/sh").unwrap();
+                        let c_arg0 = std::ffi::CString::new("sh").unwrap();
+                        let c_arg1 = std::ffi::CString::new("-c").unwrap();
+                        let c_arg2 = std::ffi::CString::new(inner.as_bytes()).unwrap();
+                        unsafe {
+                            libc::execvp(
+                                c_cmd.as_ptr(),
+                                [c_arg0.as_ptr(), c_arg1.as_ptr(), c_arg2.as_ptr(), std::ptr::null()].as_ptr(),
+                            );
+                            libc::_exit(127);
+                        }
+                    } else if pid > 0 {
+                        unsafe { libc::close(read_fd); }
+                        result.push_str(&format!("/proc/self/fd/{write_fd}"));
+                    } else {
+                        unsafe { libc::close(read_fd); libc::close(write_fd); }
+                        result.push_str(&format!(">({inner})"));
+                    }
                 } else {
                     result.push_str(&format!(">({inner})"));
                 }
@@ -1431,12 +1441,21 @@ impl Executor {
             .map(|a| expand_tilde(&a))
             .collect();
         expanded_args.splice(0..0, alias_args);
+        let expanded_args: Vec<String> = expanded_args
+            .iter()
+            .map(|a| Self::expand_process_substitution(a, ctx))
+            .collect();
         let expanded_args = aster_shell_core::glob::expand(&expanded_args);
+
+        let mut expanded_redirects = cmd.redirects.clone();
+        for r in &mut expanded_redirects {
+            r.target = Self::expand_process_substitution(&r.target, ctx);
+        }
 
         let expanded_cmd = SimpleCommand {
             name: expanded_name,
             args: expanded_args,
-            redirects: cmd.redirects.clone(),
+            redirects: expanded_redirects,
             span: cmd.span,
         };
 

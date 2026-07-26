@@ -4,8 +4,7 @@
 //! the correct shell mode: interactive REPL, command execution, script
 //! execution, or login shell initialization.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use aster_config::Config;
 use aster_executor::{ExecContext, ExecOutcome, Executor};
@@ -19,12 +18,18 @@ struct Shell {
     config: Config,
     history: History,
     ctx: ExecContext,
-    running: Arc<AtomicBool>,
+    sig_state: &'static aster_shell_signal::SignalState,
     last_cmd_duration: std::time::Duration,
 }
 
 impl Shell {
     fn init() -> Result<Self, ShellError> {
+        // Pre-initialize the directory stack with the actual CWD before any
+        // cd/pushd/popd can change it. Without this, the lazy OnceLock inside
+        // builtins would capture the wrong cwd (e.g. after pushd already cd'd).
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        aster_builtins::init_dir_stack(cwd);
+
         let config = match aster_config::ensure_config() {
             Ok(c) => c,
             Err(e) => {
@@ -57,20 +62,7 @@ impl Shell {
         aster_shell_signal::install_handlers(sig_state);
 
         // Use the signal state's sigint flag for interrupted tracking
-        let running = Arc::new(AtomicBool::new(true));
-        let interrupted = Arc::new(AtomicBool::new(false));
-        let r = running.clone();
-        let ic = interrupted.clone();
-
-        // Register SIGINT handler via ctrlc crate that also manages REPL state
-        if ctrlc::set_handler(move || {
-            r.store(false, Ordering::SeqCst);
-            ic.store(true, Ordering::SeqCst);
-        })
-        .is_err()
-        {
-            eprintln!("aster: warning: could not set Ctrl-C handler");
-        }
+        let sig_state = aster_shell_signal::global_state();
 
         Ok(Self {
             config,
@@ -80,10 +72,9 @@ impl Shell {
                 prev_dir: None,
                 aliases,
                 abbreviations,
-                interrupted,
                 ..ExecContext::default()
             },
-            running,
+            sig_state,
             last_cmd_duration: std::time::Duration::ZERO,
         })
     }
@@ -158,8 +149,7 @@ impl Shell {
         };
 
         loop {
-            if !self.running.load(Ordering::SeqCst) {
-                self.running.store(true, Ordering::SeqCst);
+            if self.sig_state.sigint.swap(false, Ordering::SeqCst) {
                 eprintln!();
                 continue;
             }
@@ -180,8 +170,6 @@ impl Shell {
             if trimmed.is_empty() {
                 continue;
             }
-
-            self.running.store(true, Ordering::SeqCst);
 
             if trimmed == "exit" || trimmed.starts_with("exit ") {
                 let code = trimmed
@@ -214,7 +202,7 @@ impl Shell {
                 eprintln!("aster: {e}");
             }
 
-            if self.ctx.interrupted.swap(false, Ordering::SeqCst) {
+            if self.sig_state.sigint.swap(false, Ordering::SeqCst) {
                 eprintln!();
             }
 

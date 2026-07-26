@@ -172,6 +172,20 @@ impl<'a> Lexer<'a> {
                         self.read_heredoc_body();
                         Ok(Some(token))
                     }
+                } else if self.peek() == Some('(') {
+                    // Process substitution: <(...)
+                    self.advance(); // consume '('
+                    let mut word = String::from("<(");
+                    self.read_balanced(&mut word, 1, ')');
+                    Ok(Some(Token {
+                        kind: TokenKind::Word(word),
+                        span: aster_shell_core::Span::new(
+                            start_line,
+                            start_col,
+                            start_offset,
+                            self.pos - start_offset,
+                        ),
+                    }))
                 } else if self.peek() == Some('&') {
                     self.advance();
                     Ok(Some(self.make_token_at(
@@ -199,6 +213,20 @@ impl<'a> Lexer<'a> {
                         start_col,
                         start_offset,
                     )))
+                } else if self.peek() == Some('(') {
+                    // Process substitution: >(...)
+                    self.advance(); // consume '('
+                    let mut word = String::from(">(");
+                    self.read_balanced(&mut word, 1, ')');
+                    Ok(Some(Token {
+                        kind: TokenKind::Word(word),
+                        span: aster_shell_core::Span::new(
+                            start_line,
+                            start_col,
+                            start_offset,
+                            self.pos - start_offset,
+                        ),
+                    }))
                 } else if self.peek() == Some('&') {
                     self.advance();
                     Ok(Some(self.make_token_at(
