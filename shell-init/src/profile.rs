@@ -51,7 +51,7 @@ impl ProfileLoader {
     /// This file is only sourced for login shells. It typically sets up
     /// system-wide PATH, locale, and other environment variables.
     pub fn source_etc_profile(&self) {
-        self.source_file(Path::new("/etc/profile"));
+        self.source_file_and_apply(Path::new("/etc/profile"));
     }
 
     /// Sources the first found of `~/.bash_profile`, `~/.bash_login`, `~/.profile`.
@@ -69,7 +69,7 @@ impl ProfileLoader {
         for name in &candidates {
             let path = home.join(name);
             if path.is_file() {
-                self.source_file(&path);
+                self.source_file_and_apply(&path);
                 return;
             }
         }
@@ -89,7 +89,7 @@ impl ProfileLoader {
             .join(".config")
             .join("astershell")
             .join("profile");
-        self.source_file(&path);
+        self.source_file_and_apply(&path);
     }
 
     /// Sources `~/.config/astershell/env`.
@@ -102,7 +102,7 @@ impl ProfileLoader {
         };
 
         let path = home.join(".config").join("astershell").join("env");
-        self.source_file(&path);
+        self.source_file_and_apply(&path);
     }
 
     /// Sources the interactive RC file (`~/.config/astershell/shellrc`).
@@ -113,7 +113,7 @@ impl ProfileLoader {
         if let Ok(rc_path) = std::env::var("ASTER_SHELL_RC") {
             let path = PathBuf::from(&rc_path);
             if path.is_file() {
-                self.source_file(&path);
+                self.source_file_and_apply(&path);
                 return;
             }
         }
@@ -134,7 +134,7 @@ impl ProfileLoader {
 
         for path in &candidates {
             if path.is_file() {
-                self.source_file(path);
+                self.source_file_and_apply(path);
                 return;
             }
         }
@@ -151,10 +151,10 @@ impl ProfileLoader {
     /// We execute them via `/bin/sh` to ensure full POSIX compatibility.
     /// The environment changes made by the script are captured and applied
     /// to the current process.
-    fn source_file(&self, path: &Path) {
+    fn source_file(&self, path: &Path) -> Vec<(String, String)> {
         if !path.is_file() {
             log::debug!("Profile not found (skipping): {}", path.display());
-            return;
+            return Vec::new();
         }
 
         log::info!("Sourcing profile: {}", path.display());
@@ -177,21 +177,17 @@ env -0
             .arg(&script)
             .output();
 
+        let mut env_pairs = Vec::new();
+
         match result {
             Ok(output) => {
                 if output.status.success() {
-                    // Parse NUL-delimited environment and apply
+                    // Parse NUL-delimited environment and collect
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     for entry in stdout.split('\0') {
                         if let Some((key, value)) = entry.split_once('=') {
                             if !key.is_empty() {
-                                // SAFETY: AsterShell is single-threaded during
-                                // initialization. Environment variables set by
-                                // profile files are essential for session setup.
-                                #[allow(unsafe_code)]
-                                unsafe {
-                                    std::env::set_var(key, value);
-                                }
+                                env_pairs.push((key.to_string(), value.to_string()));
                             }
                         }
                     }
@@ -210,6 +206,25 @@ env -0
                 );
             }
         }
+
+        env_pairs
+    }
+
+    /// Sources a file and applies its environment variables to the current process.
+    ///
+    /// # Safety
+    ///
+    /// This calls `std::env::set_var()` which must only be called when no other
+    /// threads are reading environment variables. Call this BEFORE installing
+    /// signal handlers (ctrlc, etc.).
+    fn source_file_and_apply(&self, path: &Path) {
+        let env_pairs = self.source_file(path);
+        for (key, value) in &env_pairs {
+            #[allow(unsafe_code)]
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
     }
 }
 
@@ -226,8 +241,9 @@ mod tests {
     #[test]
     fn test_nonexistent_file_silently_skipped() {
         let loader = ProfileLoader::new(false);
-        // Should not panic
-        loader.source_file(Path::new("/nonexistent/profile/file.sh"));
+        // Should not panic — returns empty vec
+        let result = loader.source_file(Path::new("/nonexistent/profile/file.sh"));
+        assert!(result.is_empty());
     }
 
     #[test]

@@ -912,7 +912,7 @@ impl Executor {
                                     let val = get_var_value(var_name, ctx);
                                     let re = glob_to_regex(pattern);
                                     let mut best_cut = val.len();
-                                    for i in 0..val.len() {
+                                    for (i, _) in val.char_indices() {
                                         if re.is_match(&val[i..]) {
                                             best_cut = i;
                                         }
@@ -924,7 +924,7 @@ impl Executor {
                                     let val = get_var_value(var_name, ctx);
                                     let re = glob_to_regex(pattern);
                                     let mut found = false;
-                                    for i in 0..val.len() {
+                                    for (i, _) in val.char_indices() {
                                         if re.is_match(&val[i..]) {
                                             result.push_str(&val[..i]);
                                             found = true;
@@ -940,8 +940,8 @@ impl Executor {
                                     let val = get_var_value(var_name, ctx);
                                     let re = glob_to_regex(pattern);
                                     let mut best_cut = 0;
-                                    for i in 1..=val.len() {
-                                        if re.is_match(&val[..i]) {
+                                    for (i, _) in val.char_indices().chain(std::iter::once((val.len(), '\0'))) {
+                                        if i > 0 && re.is_match(&val[..i]) {
                                             best_cut = i;
                                         }
                                     }
@@ -952,8 +952,8 @@ impl Executor {
                                     let val = get_var_value(var_name, ctx);
                                     let re = glob_to_regex(pattern);
                                     let mut found = false;
-                                    for i in 1..=val.len() {
-                                        if re.is_match(&val[..i]) {
+                                    for (i, _) in val.char_indices().chain(std::iter::once((val.len(), '\0'))) {
+                                        if i > 0 && re.is_match(&val[..i]) {
                                             result.push_str(&val[i..]);
                                             found = true;
                                             break;
@@ -2144,25 +2144,31 @@ impl Executor {
                 eprintln!("umask: invalid mode");
                 return Ok(ExecOutcome::Success(1));
             }
-            "pushd" | "popd" => {
-                // Stack-based directory navigation stub
-                return Ok(ExecOutcome::Success(0));
-            }
-            "dirs" => {
-                return Ok(ExecOutcome::Success(0));
-            }
             "export" => {
-                for arg in &expanded_cmd.args {
-                    if let Some((name, value)) = arg.split_once('=') {
-                        let expanded_value = Self::expand_variables(value, ctx);
-                        ctx.variables.insert(name.to_string(), expanded_value.clone());
+                if expanded_cmd.args.is_empty() {
+                    // export without args: print all exported variables
+                    let mut vars: Vec<_> = ctx.variables.iter().collect();
+                    vars.sort_by(|a, b| a.0.cmp(b.0));
+                    for (name, value) in vars {
                         #[allow(unsafe_code)]
-                        unsafe { std::env::set_var(name, expanded_value.as_str()); }
-                    } else {
-                        // export VAR — mark existing var as exported
-                        if let Some(val) = ctx.variables.get(arg).cloned() {
+                        unsafe { std::env::set_var(name.as_str(), value.as_str()); }
+                        println!("declare -x {name}=\"{value}\"");
+                    }
+                } else {
+                    for arg in &expanded_cmd.args {
+                        if let Some((name, value)) = arg.split_once('=') {
+                            let expanded_value = Self::expand_variables(value, ctx);
+                            ctx.variables.insert(name.to_string(), expanded_value.clone());
                             #[allow(unsafe_code)]
-                            unsafe { std::env::set_var(arg.as_str(), val.as_str()); }
+                            unsafe { std::env::set_var(name, expanded_value.as_str()); }
+                        } else {
+                            // export VAR — mark existing var as exported
+                            if let Some(val) = ctx.variables.get(arg).cloned() {
+                                #[allow(unsafe_code)]
+                                unsafe { std::env::set_var(arg.as_str(), val.as_str()); }
+                            } else if let Ok(value) = std::env::var(arg) {
+                                ctx.variables.insert(arg.clone(), value);
+                            }
                         }
                     }
                 }
@@ -2176,35 +2182,6 @@ impl Executor {
             let expr = &expanded_cmd.name[1..];
             let result = eval_arithmetic(expr, ctx)?;
             println!("{result}");
-            return Ok(ExecOutcome::Success(0));
-        }
-
-        // Handle export VAR=value directly (syncs with ctx.variables)
-        if expanded_cmd.name == "export" {
-            if expanded_cmd.args.is_empty() {
-                // export without args: export all ctx.variables
-                let mut vars: Vec<_> = ctx.variables.iter().collect();
-                vars.sort_by(|a, b| a.0.cmp(b.0));
-                for (name, value) in vars {
-                    #[allow(unsafe_code)]
-                    unsafe { std::env::set_var(name.as_str(), value.as_str()); }
-                    println!("declare -x {name}=\"{value}\"");
-                }
-                return Ok(ExecOutcome::Success(0));
-            }
-            for arg in &expanded_cmd.args {
-                if let Some((name, value)) = arg.split_once('=') {
-                    let expanded_value = Self::expand_variables(value, ctx);
-                    ctx.variables.insert(name.to_string(), expanded_value.clone());
-                    #[allow(unsafe_code)]
-                    unsafe { std::env::set_var(name, expanded_value.as_str()); }
-                } else if let Some(value) = ctx.variables.get(arg).cloned() {
-                    #[allow(unsafe_code)]
-                    unsafe { std::env::set_var(arg.as_str(), value.as_str()); }
-                } else if let Ok(value) = std::env::var(arg) {
-                    ctx.variables.insert(arg.clone(), value);
-                }
-            }
             return Ok(ExecOutcome::Success(0));
         }
 

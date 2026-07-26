@@ -90,9 +90,15 @@ pub fn global_state() -> &'static SignalState {
 ///
 /// This should be called once during shell initialization, before any
 /// child processes are spawned.
+///
+/// # Note
+///
+/// SIGCHLD handler is intentionally NOT installed because the executor
+/// uses `std::process::Command` which manages its own child reaping.
+/// When the executor migrates to raw `fork_exec()`, enable SIGCHLD here.
 pub fn install_handlers(_state: &'static SignalState) {
     install_sigint_handler();
-    install_sigchld_handler();
+    // install_sigchld_handler(); // DISABLED: conflicts with Command::wait()
     install_sigwinch_handler();
     install_sigterm_handler();
     install_sighup_handler();
@@ -118,6 +124,7 @@ fn install_sigint_handler() {
 }
 
 #[allow(unsafe_code)]
+#[allow(dead_code)]
 fn install_sigchld_handler() {
     extern "C" fn handler(_sig: libc::c_int) {
         let state = global_state();
@@ -211,35 +218,19 @@ fn install_sigquit_handler() {
     }
 }
 
-/// SIGTSTP: ignore in shell, forward to foreground group.
+/// SIGTSTP: let the default action (stop process group) happen.
 #[allow(unsafe_code)]
 fn install_sigtstp_handler() {
-    extern "C" fn handler(_sig: libc::c_int) {
-        // Shell ignores SIGTSTP — foreground process group handles it
-    }
-
     unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = handler as *const () as usize;
-        sa.sa_flags = 0;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGTSTP, &sa, std::ptr::null_mut());
+        libc::signal(libc::SIGTSTP, libc::SIG_DFL);
     }
 }
 
-/// SIGCONT: default action is continue; we set it to default.
+/// SIGCONT: let the default action (continue stopped process) happen.
 #[allow(unsafe_code)]
 fn install_sigcont_handler() {
-    extern "C" fn handler(_sig: libc::c_int) {
-        // Default action: continue stopped process
-    }
-
     unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = handler as *const () as usize;
-        sa.sa_flags = 0;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGCONT, &sa, std::ptr::null_mut());
+        libc::signal(libc::SIGCONT, libc::SIG_DFL);
     }
 }
 

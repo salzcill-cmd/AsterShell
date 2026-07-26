@@ -45,6 +45,7 @@ dependencies = [
  "dirs",
  "libc",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
 ]
 

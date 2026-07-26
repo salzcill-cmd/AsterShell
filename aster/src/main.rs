@@ -4,8 +4,8 @@
 //! the correct shell mode: interactive REPL, command execution, script
 //! execution, or login shell initialization.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use aster_config::Config;
 use aster_executor::{ExecContext, ExecOutcome, Executor};
@@ -29,7 +29,6 @@ impl Shell {
             Ok(c) => c,
             Err(e) => {
                 // Configuration errors must NEVER crash the shell.
-                // Print diagnostic and use defaults.
                 eprintln!("aster: config error (using defaults): {e}");
                 Config::default()
             }
@@ -47,21 +46,26 @@ impl Shell {
             abbreviations.insert(name.clone(), value.clone());
         }
 
+        // Install POSIX signal handlers (SIGINT, SIGWINCH, SIGTERM, etc.)
+        // NOTE: SIGCHLD handler is NOT installed here because the executor uses
+        // std::process::Command which manages its own child reaping via wait().
+        // Installing a SIGCHLD handler that calls waitpid(-1, WNOHANG) would steal
+        // children before Command::wait() can collect them, causing "No child
+        // processes" errors. SIGCHLD handling will be enabled when the executor
+        // is migrated to use shell-session's fork_exec() instead.
+        let sig_state = aster_shell_signal::global_state();
+        aster_shell_signal::install_handlers(sig_state);
+
+        // Use the signal state's sigint flag for interrupted tracking
         let running = Arc::new(AtomicBool::new(true));
-        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let interrupted = Arc::new(AtomicBool::new(false));
         let r = running.clone();
         let ic = interrupted.clone();
+
+        // Register SIGINT handler via ctrlc crate that also manages REPL state
         if ctrlc::set_handler(move || {
-            r.store(false, Ordering::Relaxed);
-            ic.store(true, Ordering::Relaxed);
-            // Send SIGINT to the foreground process group if one exists
-            #[allow(unsafe_code)]
-            unsafe {
-                let pgid = libc::getpgid(0);
-                if pgid > 0 {
-                    libc::kill(-pgid, libc::SIGINT);
-                }
-            }
+            r.store(false, Ordering::SeqCst);
+            ic.store(true, Ordering::SeqCst);
         })
         .is_err()
         {
@@ -154,8 +158,8 @@ impl Shell {
         };
 
         loop {
-            if !self.running.load(Ordering::Relaxed) {
-                self.running.store(true, Ordering::Relaxed);
+            if !self.running.load(Ordering::SeqCst) {
+                self.running.store(true, Ordering::SeqCst);
                 eprintln!();
                 continue;
             }
@@ -177,7 +181,7 @@ impl Shell {
                 continue;
             }
 
-            self.running.store(true, Ordering::Relaxed);
+            self.running.store(true, Ordering::SeqCst);
 
             if trimmed == "exit" || trimmed.starts_with("exit ") {
                 let code = trimmed
@@ -187,6 +191,9 @@ impl Shell {
                     .parse::<i32>()
                     .unwrap_or(0);
                 let _ = editor.save_history();
+                self.history.save().unwrap_or_else(|e| {
+                    eprintln!("aster: failed to save history: {e}");
+                });
                 std::process::exit(code);
             }
 
@@ -207,7 +214,7 @@ impl Shell {
                 eprintln!("aster: {e}");
             }
 
-            if self.ctx.interrupted.swap(false, Ordering::Relaxed) {
+            if self.ctx.interrupted.swap(false, Ordering::SeqCst) {
                 eprintln!();
             }
 
@@ -245,11 +252,26 @@ fn main() {
         )
         .init();
 
+    // Bridge `log` macros to the `tracing` subscriber
+    tracing_log::LogTracer::init().ok();
+
     // ── Phase 1: Initialize shell detection and environment preservation ──
     let init = ShellInit::initialize();
 
     // ── Phase 2: Source profile files (login/interactive) ──
+    // SAFETY: This must happen BEFORE signal handlers are installed (Shell::init)
+    // because profile sourcing calls std::env::set_var which is UB if other
+    // threads are reading environment variables simultaneously.
     init.source_profiles();
+
+    // ── Phase 2.5: Verify critical environment variables are preserved ──
+    let missing = init.env_preserver.check_all_preservation();
+    if !missing.is_empty() {
+        eprintln!(
+            "aster: warning: lost environment variables after profile sourcing: {}",
+            missing.join(", ")
+        );
+    }
 
     // ── Phase 3: Dispatch based on shell mode ──
     match init.mode() {
