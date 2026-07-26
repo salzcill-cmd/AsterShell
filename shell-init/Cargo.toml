@@ -1,0 +1,21 @@
+[package]
+name = "aster-shell-init"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Login shell detection, CLI argument parsing, profile sourcing, and environment preservation for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-shell-init"
+keywords = ["shell", "login", "init"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+libc.workspace = true
+dirs.workspace = true
+log.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

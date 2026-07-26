@@ -18,6 +18,9 @@ doc = true
 
 [dependencies]
 aster-shell-core.workspace = true
+aster-shell-init.workspace = true
+aster-shell-signal.workspace = true
+aster-shell-session.workspace = true
 aster-utils.workspace = true
 aster-config.workspace = true
 aster-parser.workspace = true

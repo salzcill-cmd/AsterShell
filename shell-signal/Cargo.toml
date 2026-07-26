@@ -1,0 +1,19 @@
+[package]
+name = "aster-shell-signal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "POSIX signal handling for AsterShell"
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/aster-shell-signal"
+keywords = ["shell", "signal", "posix"]
+categories = ["os", "command-line-utilities"]
+
+[dependencies]
+libc.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

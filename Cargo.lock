@@ -36,6 +36,9 @@ dependencies = [
  "aster-plugin",
  "aster-prompt",
  "aster-shell-core",
+ "aster-shell-init",
+ "aster-shell-session",
+ "aster-shell-signal",
  "aster-theme",
  "aster-utils",
  "ctrlc",
@@ -204,12 +207,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "aster-shell-init"
+version = "0.4.0"
+dependencies = [
+ "dirs",
+ "libc",
+ "log",
+ "thiserror",
+]
+
+[[package]]
 name = "aster-shell-integration-tests"
 version = "0.1.0"
 dependencies = [
  "aster-executor",
  "aster-lexer",
  "aster-parser",
+]
+
+[[package]]
+name = "aster-shell-session"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "log",
+ "thiserror",
+]
+
+[[package]]
+name = "aster-shell-signal"
+version = "0.4.0"
+dependencies = [
+ "libc",
+ "log",
 ]
 
 [[package]]

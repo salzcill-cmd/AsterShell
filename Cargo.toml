@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "shell-core",
+    "shell-init",
+    "shell-signal",
+    "shell-session",
     "utils",
     "config",
     "parser",
@@ -37,6 +40,9 @@ exclude = [".github/", "docs/", "scripts/"]
 [workspace.dependencies]
 # Internal crates
 aster-shell-core = { path = "shell-core", version = "0.4.0" }
+aster-shell-init = { path = "shell-init", version = "0.4.0" }
+aster-shell-signal = { path = "shell-signal", version = "0.4.0" }
+aster-shell-session = { path = "shell-session", version = "0.4.0" }
 aster-utils = { path = "utils", version = "0.4.0" }
 aster-config = { path = "config", version = "0.4.0" }
 aster-parser = { path = "parser", version = "0.4.0" }

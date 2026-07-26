@@ -1,7 +1,8 @@
 //! `AsterShell` — a modern, fast, lightweight, extensible Linux shell.
 //!
 //! This is the main binary crate that ties together all subsystems into
-//! an interactive read-eval-print loop.
+//! the correct shell mode: interactive REPL, command execution, script
+//! execution, or login shell initialization.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +13,7 @@ use aster_history::History;
 use aster_lexer::Lexer;
 use aster_parser::Parser;
 use aster_shell_core::{AliasMap, ShellError};
+use aster_shell_init::{ShellInit, ShellMode};
 
 struct Shell {
     config: Config,
@@ -22,10 +24,17 @@ struct Shell {
 }
 
 impl Shell {
-    /// Initializes the shell: loads config, history, sets up signal handling.
-    #[allow(unsafe_code)]
     fn init() -> Result<Self, ShellError> {
-        let config = aster_config::ensure_config()?;
+        let config = match aster_config::ensure_config() {
+            Ok(c) => c,
+            Err(e) => {
+                // Configuration errors must NEVER crash the shell.
+                // Print diagnostic and use defaults.
+                eprintln!("aster: config error (using defaults): {e}");
+                Config::default()
+            }
+        };
+
         let history = History::new(config.history.max_size)?;
 
         let mut aliases = AliasMap::new();
@@ -46,6 +55,7 @@ impl Shell {
             r.store(false, Ordering::Relaxed);
             ic.store(true, Ordering::Relaxed);
             // Send SIGINT to the foreground process group if one exists
+            #[allow(unsafe_code)]
             unsafe {
                 let pgid = libc::getpgid(0);
                 if pgid > 0 {
@@ -74,7 +84,6 @@ impl Shell {
         })
     }
 
-    /// Loads and executes a startup script from a file path.
     fn load_startup_script(&mut self, path: &std::path::Path) {
         match std::fs::read_to_string(path) {
             Ok(content) => {
@@ -88,7 +97,7 @@ impl Shell {
         }
     }
 
-    /// Loads startup scripts in order: /etc/aster/shellrc, ~/.aster/shellrc, ~/.asterrc
+    /// Loads RC scripts for interactive non-login shells.
     fn load_startup_scripts(&mut self) {
         // System-wide config
         if let Some(config_dir) = dirs::config_dir() {
@@ -107,9 +116,7 @@ impl Shell {
         }
     }
 
-    /// Runs the main interactive REPL loop.
     fn run(&mut self) {
-        // Load startup scripts
         self.load_startup_scripts();
 
         if self.config.shell.welcome_message {
@@ -128,19 +135,17 @@ impl Shell {
             eprintln!();
         }
 
-        // Build the prompt
         let prompt = aster_prompt::Prompt::new(
             self.config.prompt.show_status,
             self.config.prompt.symbol.clone(),
             self.config.prompt.segments.clone(),
         );
 
-        // Determine theme
         let theme = aster_theme::find_theme(&self.config.theme.name)
             .unwrap_or_else(|| Box::new(aster_theme::DefaultTheme));
 
-        // Create the line editor
-        let mut editor = match aster_editor::EditorWrapper::new(theme, &self.config.shell.edit_mode) {
+        let mut editor = match aster_editor::EditorWrapper::new(theme, &self.config.shell.edit_mode)
+        {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("aster: failed to initialize editor: {e}");
@@ -149,17 +154,14 @@ impl Shell {
         };
 
         loop {
-            // Reset Ctrl-C flag
             if !self.running.load(Ordering::Relaxed) {
                 self.running.store(true, Ordering::Relaxed);
                 eprintln!();
                 continue;
             }
 
-            // Print prompt
             let prompt_str = prompt.render(self.ctx.last_exit_code, self.last_cmd_duration);
 
-            // Read line
             let input = match editor.readline(&prompt_str) {
                 Ok(Some(line)) => line,
                 Ok(None) => break,
@@ -171,15 +173,12 @@ impl Shell {
 
             let trimmed = input.trim();
 
-            // Skip empty input
             if trimmed.is_empty() {
                 continue;
             }
 
-            // Handle Ctrl-C reset
             self.running.store(true, Ordering::Relaxed);
 
-            // Handle exit
             if trimmed == "exit" || trimmed.starts_with("exit ") {
                 let code = trimmed
                     .strip_prefix("exit")
@@ -191,15 +190,12 @@ impl Shell {
                 std::process::exit(code);
             }
 
-            // Record history
             self.history.add(trimmed.to_string());
             let _ = editor.add_history_entry(trimmed);
             editor.update_history_cache(trimmed);
 
-            // Measure command execution duration
             let cmd_start = std::time::Instant::now();
 
-            // Handle history command
             if trimmed == "history" {
                 for (i, entry) in self.history.entries().iter().enumerate() {
                     println!(" {:>5}  {}", i + 1, entry.command);
@@ -207,21 +203,17 @@ impl Shell {
                 continue;
             }
 
-            // Lex + Parse + Execute
             if let Err(e) = self.execute_line(trimmed) {
                 eprintln!("aster: {e}");
             }
 
-            // Handle Ctrl-C during command execution
             if self.ctx.interrupted.swap(false, Ordering::Relaxed) {
                 eprintln!();
             }
 
-            // Record command duration
             self.last_cmd_duration = cmd_start.elapsed();
         }
 
-        // Save history on exit
         self.history.save().unwrap_or_else(|e| {
             eprintln!("aster: failed to save history: {e}");
         });
@@ -253,13 +245,146 @@ fn main() {
         )
         .init();
 
-    let mut shell = match Shell::init() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("aster: initialization error: {e}");
-            std::process::exit(1);
-        }
-    };
+    // ── Phase 1: Initialize shell detection and environment preservation ──
+    let init = ShellInit::initialize();
 
-    shell.run();
+    // ── Phase 2: Source profile files (login/interactive) ──
+    init.source_profiles();
+
+    // ── Phase 3: Dispatch based on shell mode ──
+    match init.mode() {
+        // ── Interactive / Login shell → enter REPL ──
+        ShellMode::Interactive => {
+            let mut shell = match Shell::init() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("aster: initialization error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            shell.run();
+            // Shell exited normally — this is fine for interactive shells.
+            // For login shells started by display managers, the REPL loop
+            // means the shell is the session leader and keeps the session alive.
+        }
+
+        // ── Non-interactive: execute a command string (`-c`) ──
+        ShellMode::Command => {
+            let command = match init.command() {
+                Some(c) => c,
+                None => {
+                    eprintln!("aster: -c: missing command argument");
+                    std::process::exit(2);
+                }
+            };
+
+            let mut shell = match Shell::init() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("aster: initialization error: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            // Set positional parameters from -c args
+            shell.ctx.positional_args = init
+                .invocation
+                .positional_args
+                .iter()
+                .cloned()
+                .collect();
+
+            match shell.execute_line(command) {
+                Ok(()) => {
+                    std::process::exit(shell.ctx.last_exit_code);
+                }
+                Err(e) => {
+                    eprintln!("aster: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // ── Non-interactive: execute a script file ──
+        ShellMode::Script => {
+            let script_path = match init.script_file() {
+                Some(p) => p,
+                None => {
+                    eprintln!("aster: no script file specified");
+                    std::process::exit(2);
+                }
+            };
+
+            let contents = match std::fs::read_to_string(script_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("aster: {script_path}: {e}");
+                    std::process::exit(127);
+                }
+            };
+
+            let mut shell = match Shell::init() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("aster: initialization error: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            // Set $0 to the script name, positional args from remaining args
+            shell.ctx.positional_args = init
+                .invocation
+                .positional_args
+                .iter()
+                .cloned()
+                .collect();
+
+            match shell.execute_line(&contents) {
+                Ok(()) => {
+                    std::process::exit(shell.ctx.last_exit_code);
+                }
+                Err(e) => {
+                    eprintln!("aster: {script_path}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // ── Non-interactive: read from stdin (`-s`) ──
+        ShellMode::Stdin => {
+            let mut contents = String::new();
+            match std::io::Read::read_to_string(&mut std::io::stdin(), &mut contents) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("aster: failed to read stdin: {e}");
+                    std::process::exit(1);
+                }
+            }
+
+            let mut shell = match Shell::init() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("aster: initialization error: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            shell.ctx.positional_args = init
+                .invocation
+                .positional_args
+                .iter()
+                .cloned()
+                .collect();
+
+            match shell.execute_line(&contents) {
+                Ok(()) => {
+                    std::process::exit(shell.ctx.last_exit_code);
+                }
+                Err(e) => {
+                    eprintln!("aster: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
 }

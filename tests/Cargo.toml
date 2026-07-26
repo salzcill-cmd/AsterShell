@@ -12,3 +12,7 @@ aster-executor = { path = "../executor" }
 [[test]]
 name = "integration_tests"
 path = "integration_tests.rs"
+
+[[test]]
+name = "login_integration_tests"
+path = "login_integration_tests.rs"
