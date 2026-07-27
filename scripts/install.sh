@@ -86,13 +86,32 @@ build_from_source() {
         exit 1
     fi
 
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local project_dir
-    project_dir="$(dirname "$script_dir")"
+    local project_dir=""
+
+    # Check if BASH_SOURCE[0] points to a real file (not piped)
+    if [[ -n "${BASH_SOURCE[0]}" && "${BASH_SOURCE[0]}" != "-" && -f "${BASH_SOURCE[0]}" ]]; then
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        project_dir="$(dirname "$script_dir")"
+    fi
+
+    # If no valid project dir or Cargo.toml missing, clone the repo
+    if [[ -z "$project_dir" || ! -f "$project_dir/Cargo.toml" ]]; then
+        project_dir="/tmp/astershell-src"
+        if [[ -d "$project_dir" ]]; then
+            rm -rf "$project_dir"
+        fi
+        info "Cloning source to $project_dir..."
+        if ! git clone --depth 1 https://github.com/salzcill-cmd/AsterShell.git "$project_dir" 2>/dev/null; then
+            err "Failed to clone repository. Install git or clone manually:"
+            echo "  git clone https://github.com/salzcill-cmd/AsterShell.git"
+            exit 1
+        fi
+    fi
 
     cargo build --release --manifest-path "$project_dir/Cargo.toml" --bin aster
     cp "$project_dir/target/release/aster" /tmp/aster
+    rm -rf "$project_dir"
 }
 
 install_binary() {
