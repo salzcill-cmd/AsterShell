@@ -199,6 +199,40 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// If the next tokens are I/O redirects, collect them and wrap the
+    /// statement in a `Statement::Redirected`. Used for compound commands
+    /// like `while...done < file`.
+    fn maybe_wrap_redirects(&mut self, stmt: Statement, start: Span) -> Result<Statement, ParseError> {
+        let mut redirects = Vec::new();
+        loop {
+            self.skip_comments();
+            match self.peek() {
+                Some(TokenKind::LessThan)
+                | Some(TokenKind::GreaterThan)
+                | Some(TokenKind::GreaterGreater)
+                | Some(TokenKind::LessLess)
+                | Some(TokenKind::LessLessLess)
+                | Some(TokenKind::LessAmp)
+                | Some(TokenKind::GreaterAmp)
+                | Some(TokenKind::AmpGreater)
+                | Some(TokenKind::AmpGreaterGreater) => {
+                    redirects.push(self.parse_redirect()?);
+                }
+                _ => break,
+            }
+        }
+        if redirects.is_empty() {
+            Ok(stmt)
+        } else {
+            let span = Span::merge(start, self.prev_span());
+            Ok(Statement::Redirected {
+                statement: Box::new(stmt),
+                redirects,
+                span,
+            })
+        }
+    }
+
     fn parse_if(&mut self) -> Result<Statement, ParseError> {
         let start = self.current_span();
         self.expect_keyword(IF_WORDS)?;
@@ -237,13 +271,14 @@ impl<'a> Parser<'a> {
         }
 
         let span = Span::merge(start, self.prev_span());
-        Ok(Statement::If(IfStmt {
+        let stmt = Statement::If(IfStmt {
             condition,
             body,
             elif_branches,
             else_body,
             span,
-        }))
+        });
+        self.maybe_wrap_redirects(stmt, start)
     }
 
     fn parse_while(&mut self) -> Result<Statement, ParseError> {
@@ -256,11 +291,12 @@ impl<'a> Parser<'a> {
         self.expect_keyword(DONE_WORDS)?;
 
         let span = Span::merge(start, self.prev_span());
-        Ok(Statement::While(WhileStmt {
+        let stmt = Statement::While(WhileStmt {
             condition,
             body,
             span,
-        }))
+        });
+        self.maybe_wrap_redirects(stmt, start)
     }
 
     fn parse_until(&mut self) -> Result<Statement, ParseError> {
@@ -273,11 +309,12 @@ impl<'a> Parser<'a> {
         self.expect_keyword(DONE_WORDS)?;
 
         let span = Span::merge(start, self.prev_span());
-        Ok(Statement::Until(UntilStmt {
+        let stmt = Statement::Until(UntilStmt {
             condition,
             body,
             span,
-        }))
+        });
+        self.maybe_wrap_redirects(stmt, start)
     }
 
     fn parse_for(&mut self) -> Result<Statement, ParseError> {
@@ -311,12 +348,13 @@ impl<'a> Parser<'a> {
         self.expect_keyword(DONE_WORDS)?;
 
         let span = Span::merge(start, self.prev_span());
-        Ok(Statement::For(ForStmt {
+        let stmt = Statement::For(ForStmt {
             variable,
             words,
             body,
             span,
-        }))
+        });
+        self.maybe_wrap_redirects(stmt, start)
     }
 
     fn parse_select(&mut self) -> Result<Statement, ParseError> {
@@ -349,12 +387,13 @@ impl<'a> Parser<'a> {
         self.expect_keyword(DONE_WORDS)?;
 
         let span = Span::merge(start, self.prev_span());
-        Ok(Statement::Select(SelectStmt {
+        let stmt = Statement::Select(SelectStmt {
             variable,
             words,
             body,
             span,
-        }))
+        });
+        self.maybe_wrap_redirects(stmt, start)
     }
 
     fn parse_case(&mut self) -> Result<Statement, ParseError> {
@@ -401,7 +440,8 @@ impl<'a> Parser<'a> {
         }
 
         let span = Span::merge(start, self.prev_span());
-        Ok(Statement::Case(CaseStmt { word, arms, span }))
+        let stmt = Statement::Case(CaseStmt { word, arms, span });
+        self.maybe_wrap_redirects(stmt, start)
     }
 
     fn parse_case_arm_body(&mut self) -> Result<Vec<Statement>, ParseError> {

@@ -50,6 +50,12 @@ pub enum Statement {
     Background(Box<Self>),
     /// Time a pipeline: `time cmd`.
     Time(Box<Self>),
+    /// A statement with I/O redirects (e.g., `while...done < file`).
+    Redirected {
+        statement: Box<Self>,
+        redirects: Vec<crate::Redirect>,
+        span: Span,
+    },
 }
 
 impl Statement {
@@ -74,6 +80,7 @@ impl Statement {
             Self::Arithmetic(_, s) => *s,
             Self::Background(s) => s.span(),
             Self::Time(s) => s.span(),
+            Self::Redirected { span, .. } => *span,
         }
     }
 }

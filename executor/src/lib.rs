@@ -18,6 +18,30 @@ use std::process::{Child, Command, Stdio};
 #[allow(unsafe_code)]
 use std::os::unix::process::CommandExt;
 
+/// Set an environment variable via libc, avoiding Rust std's thread-safety UB.
+///
+/// # Safety
+///
+/// The shell must be single-threaded when this is called (signal handlers
+/// only touch atomics, child processes get their own env via fork+exec).
+#[allow(unsafe_code)]
+fn shell_setenv(name: &str, value: &str) {
+    unsafe {
+        let c_name = std::ffi::CString::new(name).unwrap();
+        let c_val = std::ffi::CString::new(value).unwrap();
+        libc::setenv(c_name.as_ptr(), c_val.as_ptr(), 1);
+    }
+}
+
+/// Remove an environment variable via libc, avoiding Rust std's thread-safety UB.
+#[allow(unsafe_code)]
+fn shell_unsetenv(name: &str) {
+    unsafe {
+        let c_name = std::ffi::CString::new(name).unwrap();
+        libc::unsetenv(c_name.as_ptr());
+    }
+}
+
 /// Result of executing a program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecOutcome {
@@ -227,7 +251,90 @@ impl Executor {
                 );
                 Ok(outcome)
             }
+            Statement::Redirected { statement, redirects, .. } => {
+                let expanded_redirects: Vec<Redirect> = redirects.iter().map(|r| {
+                    let target = Self::expand_process_substitution(&r.target, ctx);
+                    Redirect { target, ..r.clone() }
+                }).collect();
+                Self::execute_redirect_compound(statement, &expanded_redirects, ctx)
+            }
         }
+    }
+
+    /// Executes a compound statement with I/O redirects applied.
+    /// Saves and restores stdin/stdout/stderr around the execution.
+    #[allow(unsafe_code)]
+    fn execute_redirect_compound(
+        stmt: &Statement,
+        redirects: &[Redirect],
+        ctx: &mut ExecContext,
+    ) -> Result<ExecOutcome, ShellError> {
+        use std::os::unix::io::AsRawFd;
+
+        // Save original FDs
+        let saved_stdin = unsafe { libc::dup(libc::STDIN_FILENO) };
+        let saved_stdout = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        let saved_stderr = unsafe { libc::dup(libc::STDERR_FILENO) };
+
+        let restore = || {
+            unsafe {
+                libc::dup2(saved_stdin, libc::STDIN_FILENO);
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO);
+                libc::dup2(saved_stderr, libc::STDERR_FILENO);
+                libc::close(saved_stdin);
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+        };
+
+        // Apply redirects
+        for redirect in redirects {
+            match redirect.kind {
+                RedirectKind::Input => {
+                    let file = File::open(&redirect.target).map_err(|e| {
+                        ExecError::RedirectFailed {
+                            target: redirect.target.clone(),
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    let fd = file.as_raw_fd();
+                    unsafe { libc::dup2(fd, libc::STDIN_FILENO); }
+                }
+                RedirectKind::Output => {
+                    let file = File::create(&redirect.target).map_err(|e| {
+                        ExecError::RedirectFailed {
+                            target: redirect.target.clone(),
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    let fd = file.as_raw_fd();
+                    match redirect.fd {
+                        Some(2) => { unsafe { libc::dup2(fd, libc::STDERR_FILENO); } }
+                        _ => { unsafe { libc::dup2(fd, libc::STDOUT_FILENO); } }
+                    }
+                }
+                RedirectKind::Append => {
+                    let file = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&redirect.target)
+                        .map_err(|e| ExecError::RedirectFailed {
+                            target: redirect.target.clone(),
+                            reason: e.to_string(),
+                        })?;
+                    let fd = file.as_raw_fd();
+                    match redirect.fd {
+                        Some(2) => { unsafe { libc::dup2(fd, libc::STDERR_FILENO); } }
+                        _ => { unsafe { libc::dup2(fd, libc::STDOUT_FILENO); } }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let result = Self::execute_statement(stmt, ctx);
+        restore();
+        result
     }
 
     fn execute_if(if_stmt: &IfStmt, ctx: &mut ExecContext) -> Result<ExecOutcome, ShellError> {
@@ -1866,6 +1973,7 @@ impl Executor {
                     }
                 }
                 let mut input = String::new();
+                let mut hit_eof = false;
                 if !prompt.is_empty() {
                     use std::io::Write;
                     let _ = print!("{prompt}");
@@ -1898,7 +2006,7 @@ impl Executor {
                                 let ready = libc::select(1, &mut fds, std::ptr::null_mut(), std::ptr::null_mut(), &mut tv);
                                 if ready > 0 {
                                     match handle.read(&mut buf) {
-                                        Ok(0) => break,
+                                        Ok(0) => { hit_eof = true; break; }
                                         Ok(_) => {
                                             let ch = buf[0] as char;
                                             if ch == delimiter || ch == '\n' {
@@ -1912,7 +2020,7 @@ impl Executor {
                             }
                         } else {
                             match handle.read(&mut buf) {
-                                Ok(0) => break,
+                                Ok(0) => { hit_eof = true; break; }
                                 Ok(_) => {
                                     let ch = buf[0] as char;
                                     if ch == delimiter || ch == '\n' {
@@ -1931,7 +2039,7 @@ impl Executor {
                     let mut buf = [0u8; 1];
                     loop {
                         match handle.read(&mut buf) {
-                            Ok(0) => break,
+                            Ok(0) => { hit_eof = true; break; }
                             Ok(_) => {
                                 let ch = buf[0] as char;
                                 if ch == delimiter {
@@ -1943,8 +2051,12 @@ impl Executor {
                         }
                     }
                 } else {
-                    let _ = std::io::stdin().read_line(&mut input);
+                    let n = std::io::stdin().read_line(&mut input);
+                    if n.unwrap_or(0) == 0 {
+                        hit_eof = true;
+                    }
                 }
+                let read_exit = if hit_eof { 1 } else { 0 };
                 let value = if raw {
                     input.trim_end_matches('\n').trim_end_matches('\r').to_string()
                 } else {
@@ -1969,7 +2081,7 @@ impl Executor {
                         ctx.variables.insert(var_name.clone(), val.to_string());
                     }
                 }
-                return Ok(ExecOutcome::Success(0));
+                return Ok(ExecOutcome::Success(read_exit));
             }
             "compgen" => {
                 return Self::builtin_compgen(&expanded_cmd.args, ctx);
@@ -2165,26 +2277,24 @@ impl Executor {
             }
             "export" => {
                 if expanded_cmd.args.is_empty() {
-                    // export without args: print all exported variables
+                    // export without args: print only already-exported variables
                     let mut vars: Vec<_> = ctx.variables.iter().collect();
                     vars.sort_by(|a, b| a.0.cmp(b.0));
                     for (name, value) in vars {
-                        #[allow(unsafe_code)]
-                        unsafe { std::env::set_var(name.as_str(), value.as_str()); }
-                        println!("declare -x {name}=\"{value}\"");
+                        if std::env::var(name.as_str()).is_ok() {
+                            println!("declare -x {name}=\"{value}\"");
+                        }
                     }
                 } else {
                     for arg in &expanded_cmd.args {
                         if let Some((name, value)) = arg.split_once('=') {
                             let expanded_value = Self::expand_variables(value, ctx);
                             ctx.variables.insert(name.to_string(), expanded_value.clone());
-                            #[allow(unsafe_code)]
-                            unsafe { std::env::set_var(name, expanded_value.as_str()); }
+                            shell_setenv(name, &expanded_value);
                         } else {
                             // export VAR — mark existing var as exported
                             if let Some(val) = ctx.variables.get(arg).cloned() {
-                                #[allow(unsafe_code)]
-                                unsafe { std::env::set_var(arg.as_str(), val.as_str()); }
+                                shell_setenv(arg, &val);
                             } else if let Ok(value) = std::env::var(arg) {
                                 ctx.variables.insert(arg.clone(), value);
                             }
@@ -2259,8 +2369,7 @@ impl Executor {
             for (name, value) in assignments {
                 ctx.variables.insert(name.clone(), value.clone());
                 if flags.contains('x') {
-                    #[allow(unsafe_code)]
-                    unsafe { std::env::set_var(name.as_str(), value.as_str()); }
+                    shell_setenv(&name, &value);
                 }
             }
             return Ok(ExecOutcome::Success(0));
@@ -2280,8 +2389,7 @@ impl Executor {
                 if let Some((name, value)) = arg.split_once('=') {
                     let expanded_value = Self::expand_variables(value, ctx);
                     ctx.variables.insert(name.to_string(), expanded_value.clone());
-                    #[allow(unsafe_code)]
-                    unsafe { std::env::set_var(name, expanded_value.as_str()); }
+                    shell_setenv(name, &expanded_value);
                 }
             }
             return Ok(ExecOutcome::Success(0));
@@ -2292,8 +2400,7 @@ impl Executor {
             for arg in &expanded_cmd.args {
                 ctx.variables.remove(arg);
                 ctx.arrays.remove(arg);
-                #[allow(unsafe_code)]
-                unsafe { std::env::remove_var(arg.as_str()); }
+                shell_unsetenv(arg);
             }
             return Ok(ExecOutcome::Success(0));
         }
