@@ -46,18 +46,34 @@ download_binary() {
     local url="https://github.com/salzcill-cmd/AsterShell/releases/download/${tag}/aster-${platform}.${ext}"
 
     info "Downloading aster for ${platform}..."
+
+    local http_code
+    local tmpball="/tmp/aster-${platform}.${ext}"
+
     if command -v curl &>/dev/null; then
-        curl -sL "$url" | tar xz -C /tmp/
+        http_code=$(curl -sL -o "$tmpball" -w "%{http_code}" "$url")
     elif command -v wget &>/dev/null; then
-        wget -qO- "$url" | tar xz -C /tmp/
+        http_code=$(wget -q -O "$tmpball" --server-response "$url" 2>&1 | grep -oP 'HTTP/[0-9.]+ \K[0-9]+' | tail -1)
+        http_code="${http_code:-000}"
     else
         err "Neither curl nor wget found. Install one first."
-        exit 1
+        return 1
     fi
 
+    if [[ "$http_code" != "200" ]]; then
+        rm -f "$tmpball"
+        return 1
+    fi
+
+    if ! tar xzf "$tmpball" -C /tmp/ 2>/dev/null; then
+        rm -f "$tmpball"
+        return 1
+    fi
+    rm -f "$tmpball"
+
     if [[ ! -f /tmp/aster ]]; then
-        err "Download failed — binary not found."
-        exit 1
+        err "Download failed — binary not found in archive."
+        return 1
     fi
 }
 
